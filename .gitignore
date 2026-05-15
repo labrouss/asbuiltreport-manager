@@ -1,0 +1,16 @@
+# Buildroot build output
+output/
+buildroot-*/
+
+# Downloaded sources cache (keep if you want to re-share)
+# downloads/
+
+# Docker image tarballs (large binary files, built by CI)
+buildroot/external/board/asbuiltreport-manager/docker-images/*.tar
+buildroot/external/board/asbuiltreport-manager/docker-images/*.tar.gz
+buildroot/external/board/asbuiltreport-manager/docker-images/.stamp_saved
+
+# Editor artefacts
+.vscode/
+*.swp
+*~

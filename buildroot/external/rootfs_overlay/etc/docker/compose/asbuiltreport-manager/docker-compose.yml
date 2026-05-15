@@ -1,0 +1,85 @@
+# =============================================================================
+# AsBuiltReport Manager — Docker Compose stack
+# Deployed at: /etc/docker/compose/asbuiltreport-manager/docker-compose.yml
+# =============================================================================
+name: asbuiltreport-manager
+
+services:
+
+  # ── App container: Express API + React frontend ──────────────────────────
+  app:
+    image: asbuiltreport-app:latest
+    container_name: asbuiltreport-app
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      REPORTS_DIR: /var/www/reports
+      WORKER_URL: http://worker:8080
+    volumes:
+      - reports_data:/var/www/reports
+      - config_data:/etc/asbuiltreport
+    networks:
+      - abr-net
+    depends_on:
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health/dependencies"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Worker container: PowerShell + PowerCLI + AsBuiltReport modules ──────
+  worker:
+    image: asbuiltreport-worker:latest
+    container_name: asbuiltreport-worker
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      REPORTS_DIR: /var/www/reports
+    volumes:
+      - reports_data:/var/www/reports
+      - config_data:/etc/asbuiltreport
+      - ps_modules:/root/.local/share/powershell/Modules
+    networks:
+      - abr-net
+    # PowerShell/VMware modules need more memory
+    mem_limit: 4g
+    mem_reservation: 2g
+    healthcheck:
+      test: ["CMD", "pwsh", "-Command", "Invoke-WebRequest -Uri http://localhost:8080/health -UseBasicParsing | Select-Object -ExpandProperty StatusCode"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  reports_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/www/reports
+
+  config_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/asbuiltreport
+
+  ps_modules:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/asbuiltreport/ps-modules
+
+networks:
+  abr-net:
+    driver: bridge

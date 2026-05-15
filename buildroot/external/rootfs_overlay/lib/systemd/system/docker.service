@@ -1,0 +1,31 @@
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target firewalld.service containerd.service
+Wants=network-online.target
+Requires=docker.socket containerd.service
+
+[Service]
+Type=notify
+# Allow large images to load without timeout during first-boot docker load
+TimeoutStartSec=300
+ExecStart=/usr/bin/dockerd \
+    --host=fd:// \
+    --containerd=/run/containerd/containerd.sock \
+    --storage-driver=overlay2 \
+    --log-driver=json-file \
+    --log-opt max-size=50m \
+    --log-opt max-file=3
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

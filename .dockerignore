@@ -1,0 +1,30 @@
+# ── Version control ────────────────────────────────────────────────────────────
+**/.git
+.github
+
+# ── OVA / Buildroot build tree ─────────────────────────────────────────────────
+# The buildroot/ directory is only needed by the OVA pipeline, not by Docker.
+# Excluding it prevents the app build context from ballooning with
+# docker-images/*.tar.gz and output/ artefacts on developer machines.
+buildroot/
+output/
+downloads/
+
+# ── Node.js ────────────────────────────────────────────────────────────────────
+**/node_modules
+**/npm-debug.log*
+
+# ── Worker directory ───────────────────────────────────────────────────────────
+# The root Dockerfile only COPYs frontend/ and backend/.
+# Excluding worker/ keeps the app build context lean (avoids sending
+# large PowerShell scripts and the worker Dockerfile to the daemon).
+worker/
+
+# ── Dev / docs artifacts ────────────────────────────────────────────────────────
+**/.DS_Store
+.vscode/
+*.swp
+*~
+
+# ── Leftover from bad zip extractions ──────────────────────────────────────────
+{*

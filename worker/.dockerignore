@@ -1,0 +1,8 @@
+# Ignore corrupted/stale directories from bad extractions
+{*
+node_modules
+*/node_modules
+.git
+*.md
+Makefile
+setup.sh

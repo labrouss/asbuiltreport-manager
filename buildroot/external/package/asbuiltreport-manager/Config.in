@@ -1,0 +1,7 @@
+config BR2_PACKAGE_ASBUILTREPORT_MANAGER
+    bool "asbuiltreport-manager"
+    default y
+    help
+      Installs the AsBuiltReport Manager Docker Compose application,
+      pre-loaded Docker images, systemd service, management console,
+      and first-boot configuration scripts.

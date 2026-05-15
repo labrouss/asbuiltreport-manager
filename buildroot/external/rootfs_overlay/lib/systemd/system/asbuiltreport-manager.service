@@ -1,0 +1,29 @@
+[Unit]
+Description=AsBuiltReport Manager — Docker Compose Stack
+Documentation=https://www.asbuiltreport.com
+After=docker.service network-online.target asbuiltreport-first-boot.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/etc/docker/compose/asbuiltreport-manager
+StandardOutput=journal
+StandardError=journal
+
+# Ensure bind-mount directories exist before compose starts
+ExecStartPre=/bin/mkdir -p /var/www/reports
+ExecStartPre=/bin/mkdir -p /etc/asbuiltreport
+ExecStartPre=/bin/mkdir -p /var/lib/asbuiltreport/ps-modules
+
+ExecStart=/usr/libexec/docker/cli-plugins/docker-compose up -d --remove-orphans
+ExecStop=/usr/libexec/docker/cli-plugins/docker-compose down
+ExecReload=/usr/libexec/docker/cli-plugins/docker-compose pull
+ExecReload=/usr/libexec/docker/cli-plugins/docker-compose up -d --remove-orphans
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

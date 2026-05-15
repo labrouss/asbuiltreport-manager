@@ -1,0 +1,14 @@
+
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║          AsBuiltReport Manager Appliance                     ║
+  ╠═══════════════════════════════════════════════════════════════╣
+  ║                                                               ║
+  ║  Web UI:     http://<this-ip>:3001                           ║
+  ║  Console:    run 'abr-console' for the management TUI       ║
+  ║  Logs:       journalctl -u asbuiltreport-manager -f         ║
+  ║  Containers: docker compose -f                               ║
+  ║              /etc/docker/compose/asbuiltreport-manager/      ║
+  ║              docker-compose.yml ps                           ║
+  ║                                                               ║
+  ╚═══════════════════════════════════════════════════════════════╝
+

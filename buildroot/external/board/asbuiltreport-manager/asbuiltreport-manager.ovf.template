@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AsBuiltReport Manager — OVF Descriptor Template
+  Processed by post-image.sh; tokens replaced with @@TOKEN@@ syntax.
+
+  VM Specification:
+    CPU:  4 vCPU
+    RAM:  8 GB
+    Disk: 40 GB (SCSI LSI Logic, thin-provisioned VMDK)
+    NIC:  VMXNET3 (E1000 fallback)
+
+  OVF Properties (configurable at deploy-time in vCenter):
+    guestinfo.hostname   — VM hostname
+    guestinfo.ipaddress  — Static IP (CIDR notation, e.g. 192.168.1.50/24)
+                           Leave blank to use DHCP
+    guestinfo.gateway    — Default gateway IP
+    guestinfo.dns        — DNS server(s), space-separated
+    guestinfo.password   — Initial root/admin password (SHA-512 hashed at runtime)
+-->
+<Envelope
+    xmlns="http://schemas.dmtf.org/ovf/envelope/1"
+    xmlns:cim="http://schemas.dmtf.org/wbem/wscim/1/common"
+    xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
+    xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
+    xmlns:vmw="http://www.vmware.com/schema/ovf"
+    xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://schemas.dmtf.org/ovf/envelope/1 http://schemas.dmtf.org/ovf/envelope/1/dsp8023_1.1.0.xsd">
+
+  <!-- ── References ── -->
+  <References>
+    <File
+        ovf:id="disk1"
+        ovf:href="@@VMDK_FILENAME@@"
+        ovf:size="@@VMDK_SIZE_BYTES@@"/>
+  </References>
+
+  <!-- ── Disk Section ── -->
+  <DiskSection>
+    <Info>Virtual disk information</Info>
+    <Disk
+        ovf:diskId="vmdisk1"
+        ovf:fileRef="disk1"
+        ovf:capacity="@@DISK_SIZE_GIB@@"
+        ovf:capacityAllocationUnits="byte * 2^30"
+        ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
+        ovf:populatedSize="@@VMDK_SIZE_BYTES@@"/>
+  </DiskSection>
+
+  <!-- ── Network Section ── -->
+  <NetworkSection>
+    <Info>VM network adapters</Info>
+    <Network ovf:name="VM Network">
+      <Description>The network that this VM will be connected to</Description>
+    </Network>
+  </NetworkSection>
+
+  <!-- ── Virtual System ── -->
+  <VirtualSystem ovf:id="@@APPLIANCE_NAME@@">
+    <Info>AsBuiltReport Manager v@@VERSION@@ — VMware OVA Appliance</Info>
+    <Name>@@APPLIANCE_NAME@@</Name>
+
+    <!-- ── Operating System ── -->
+    <OperatingSystemSection ovf:id="101" vmw:osType="otherLinux64Guest">
+      <Info>Guest OS</Info>
+      <Description>Linux (64-bit)</Description>
+    </OperatingSystemSection>
+
+    <!-- ── Virtual Hardware ── -->
+    <VirtualHardwareSection>
+      <Info>4 vCPU, 8 GB RAM, 40 GB disk</Info>
+
+      <System>
+        <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
+        <vssd:InstanceID>0</vssd:InstanceID>
+        <vssd:VirtualSystemType>vmx-19</vssd:VirtualSystemType>
+      </System>
+
+      <!-- CPU: 4 vCPU -->
+      <Item>
+        <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
+        <rasd:Description>Number of virtual CPUs</rasd:Description>
+        <rasd:ElementName>4 virtual CPU(s)</rasd:ElementName>
+        <rasd:InstanceID>1</rasd:InstanceID>
+        <rasd:ResourceType>3</rasd:ResourceType>
+        <rasd:VirtualQuantity>4</rasd:VirtualQuantity>
+      </Item>
+
+      <!-- RAM: 8192 MB -->
+      <Item>
+        <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
+        <rasd:Description>Memory Size</rasd:Description>
+        <rasd:ElementName>8192 MB of memory</rasd:ElementName>
+        <rasd:InstanceID>2</rasd:InstanceID>
+        <rasd:ResourceType>4</rasd:ResourceType>
+        <rasd:VirtualQuantity>8192</rasd:VirtualQuantity>
+      </Item>
+
+      <!-- SCSI Controller (LSI Logic) -->
+      <Item>
+        <rasd:Address>0</rasd:Address>
+        <rasd:Description>SCSI Controller</rasd:Description>
+        <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
+        <rasd:InstanceID>3</rasd:InstanceID>
+        <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
+        <rasd:ResourceType>6</rasd:ResourceType>
+      </Item>
+
+      <!-- Disk drive -->
+      <Item>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:ElementName>Hard Disk 1</rasd:ElementName>
+        <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
+        <rasd:InstanceID>4</rasd:InstanceID>
+        <rasd:Parent>3</rasd:Parent>
+        <rasd:ResourceType>17</rasd:ResourceType>
+      </Item>
+
+      <!-- IDE Controller (CD-ROM) -->
+      <Item>
+        <rasd:Address>1</rasd:Address>
+        <rasd:Description>IDE Controller</rasd:Description>
+        <rasd:ElementName>IDE Controller 1</rasd:ElementName>
+        <rasd:InstanceID>5</rasd:InstanceID>
+        <rasd:ResourceType>5</rasd:ResourceType>
+      </Item>
+
+      <!-- CD-ROM -->
+      <Item ovf:required="false">
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:AutomaticAllocation>false</rasd:AutomaticAllocation>
+        <rasd:ElementName>CD-ROM 1</rasd:ElementName>
+        <rasd:InstanceID>6</rasd:InstanceID>
+        <rasd:Parent>5</rasd:Parent>
+        <rasd:ResourceType>15</rasd:ResourceType>
+      </Item>
+
+      <!-- NIC: VMXNET3 -->
+      <Item>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
+        <rasd:Connection>VM Network</rasd:Connection>
+        <rasd:Description>VMXNET3 Network Adapter</rasd:Description>
+        <rasd:ElementName>Network Adapter 1</rasd:ElementName>
+        <rasd:InstanceID>7</rasd:InstanceID>
+        <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
+        <rasd:ResourceType>10</rasd:ResourceType>
+      </Item>
+
+      <!-- VMware extras: enable VMX Guest Info / GuestOS -->
+      <vmw:ExtraConfig ovf:required="false" vmw:key="guestinfo.ovfenv" vmw:value=""/>
+      <vmw:ExtraConfig ovf:required="false" vmw:key="vmware.tools.internalversion" vmw:value="0"/>
+    </VirtualHardwareSection>
+
+    <!-- ── OVF Properties ── -->
+    <ProductSection>
+      <Info>Application configuration properties</Info>
+      <Product>AsBuiltReport Manager</Product>
+      <Vendor>AsBuiltReport</Vendor>
+      <Version>@@VERSION@@</Version>
+      <FullVersion>@@VERSION@@</FullVersion>
+      <ProductUrl>https://www.asbuiltreport.com</ProductUrl>
+
+      <!-- Networking -->
+      <Property ovf:key="guestinfo.hostname"
+                ovf:type="string"
+                ovf:userConfigurable="true"
+                ovf:value="asbuiltreport-manager">
+        <Label>Hostname</Label>
+        <Description>Fully-qualified hostname for the appliance (e.g. abr.company.local)</Description>
+      </Property>
+
+      <Property ovf:key="guestinfo.ipaddress"
+                ovf:type="string"
+                ovf:userConfigurable="true"
+                ovf:value="">
+        <Label>IP Address (CIDR)</Label>
+        <Description>Static IP in CIDR notation, e.g. 192.168.1.50/24. Leave blank to use DHCP.</Description>
+      </Property>
+
+      <Property ovf:key="guestinfo.gateway"
+                ovf:type="string"
+                ovf:userConfigurable="true"
+                ovf:value="">
+        <Label>Default Gateway</Label>
+        <Description>Default gateway IP address. Required if IP Address is set.</Description>
+      </Property>
+
+      <Property ovf:key="guestinfo.dns"
+                ovf:type="string"
+                ovf:userConfigurable="true"
+                ovf:value="8.8.8.8 8.8.4.4">
+        <Label>DNS Servers</Label>
+        <Description>Space-separated list of DNS server IP addresses.</Description>
+      </Property>
+
+      <!-- Security -->
+      <Property ovf:key="guestinfo.password"
+                ovf:type="password"
+                ovf:userConfigurable="true"
+                ovf:value="">
+        <Label>Initial Root Password</Label>
+        <Description>Password for the root account. If empty, SSH password auth is disabled (key-only).</Description>
+      </Property>
+
+      <!-- SSH -->
+      <Property ovf:key="guestinfo.ssh_authorized_key"
+                ovf:type="string"
+                ovf:userConfigurable="true"
+                ovf:value="">
+        <Label>SSH Authorized Key</Label>
+        <Description>SSH public key to authorize for root login (optional).</Description>
+      </Property>
+    </ProductSection>
+
+    <!-- ── Annotation ── -->
+    <AnnotationSection>
+      <Info>Appliance description</Info>
+      <Annotation>AsBuiltReport Manager v@@VERSION@@
+
+Web-based GUI for running AsBuiltReport PowerShell modules.
+Access the UI at: http://&lt;VM-IP&gt;:3001
+
+Components:
+  - app container:    node:20-slim / Express + React (port 3001)
+  - worker container: rockylinux:9 / PowerShell 7, VMware PowerCLI, 16+ AsBuiltReport modules
+
+Volumes:
+  /var/www/reports          — generated HTML/Word reports
+  /etc/asbuiltreport        — configuration files
+  /var/lib/asbuiltreport/ps-modules — custom PS modules
+
+Default credentials: root / (set at deploy time via OVF property)
+      </Annotation>
+    </AnnotationSection>
+
+  </VirtualSystem>
+</Envelope>

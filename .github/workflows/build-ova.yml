@@ -1,0 +1,466 @@
+name: Build AsBuiltReport Manager OVA
+
+# =============================================================================
+# Triggers:
+#   push v*.*.*   → full build + GitHub Release
+#   push main     → full build, artifact only (no release)
+#   manual        → choose Buildroot version; option to skip the expensive
+#                   worker rebuild when only app code changed
+# =============================================================================
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      buildroot_version:
+        description: 'Buildroot version'
+        required: false
+        default: '2024.02.6'
+      skip_worker_rebuild:
+        description: 'Skip worker image rebuild — reuse tarball from last successful run'
+        type: boolean
+        required: false
+        default: false
+
+# ── Shared constants ──────────────────────────────────────────────────────────
+env:
+  BUILDROOT_VERSION: ${{ github.event.inputs.buildroot_version || '2024.02.6' }}
+  # Explicit image: tags are declared in docker-compose.yml so these names
+  # are guaranteed regardless of checkout directory or project name.
+  APP_IMAGE:    asbuiltreport-app
+  WORKER_IMAGE: asbuiltreport-worker
+  # Path inside the repo where post-build.sh looks for the saved tarballs.
+  IMAGES_DIR: buildroot/external/board/asbuiltreport-manager/docker-images
+  # Docker CE + Compose plugin versions baked into the appliance OS.
+  DOCKER_VERSION:  "26.1.4"
+  COMPOSE_VERSION: "2.27.1"
+
+jobs:
+
+  # ===========================================================================
+  # JOB 1 — Build Docker images from source and save them as tarballs
+  #
+  # All internet access happens here:
+  #   app image    — npm install, vite build (~2 min)
+  #   worker image — rockylinux:9 + Veeam RPM + PowerShell + PowerCLI
+  #                  + 16 AsBuiltReport PS modules (~40 min cold, ~3 min cached)
+  #
+  # Both images are saved with `docker save | gzip` and uploaded as an artifact
+  # consumed by job 2. The deployed OVA has zero internet dependency.
+  # ===========================================================================
+  build-images:
+    name: "1/2 · Build & Save Docker Images"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────────
+      # Full repo needed: Dockerfile, frontend/, backend/, worker/, docker-compose.yml
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Docker Buildx ─────────────────────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      # ── Layer cache — app image ───────────────────────────────────────────────
+      # Keyed on every file the app Dockerfile COPYs:
+      #   frontend/ (React source), backend/ (Express source), Dockerfile itself,
+      #   and .dockerignore (affects what reaches the daemon).
+      # Changing worker/ or buildroot/ does NOT bust this cache.
+      - name: Cache app image layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-app
+          key: buildx-app-${{ hashFiles('Dockerfile', '.dockerignore', 'frontend/**', 'backend/**') }}
+          restore-keys: |
+            buildx-app-
+
+      # ── Layer cache — worker image ────────────────────────────────────────────
+      # Keyed on the three files that drive the worker's expensive RUN layers:
+      #   worker/Dockerfile, install-powercli.ps1, install-modules.ps1
+      # Everything else (entrypoint.ps1, worker.ps1, reports/) is COPYd late in
+      # the Dockerfile so those changes hit only cheap layers — they bust the
+      # cache key here but Buildx will still reuse the costly earlier layers.
+      - name: Cache worker image layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-worker
+          key: buildx-worker-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
+          restore-keys: |
+            buildx-worker-
+
+      # ── Restore saved worker tarball (skip_worker_rebuild path) ──────────────
+      # When skip_worker_rebuild=true the build step below is skipped entirely.
+      # We try to restore a previously saved tarball from the persistent cache
+      # so job 2 still gets a complete set of images.
+      # Cache key matches what the "Save worker tarball" step writes at the end.
+      - name: Restore cached worker tarball
+        id: restore-worker-tarball
+        if: ${{ github.event.inputs.skip_worker_rebuild == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.IMAGES_DIR }}/${{ env.WORKER_IMAGE }}.tar.gz
+          key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
+
+      - name: Fail fast if worker tarball unavailable
+        if: >
+          github.event.inputs.skip_worker_rebuild == 'true' &&
+          steps.restore-worker-tarball.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::skip_worker_rebuild=true but no cached worker tarball found."
+          echo "::error::Run the workflow once without skip_worker_rebuild to populate the cache."
+          exit 1
+
+      # ── Build app image ───────────────────────────────────────────────────────
+      # context: . → repo root (docker-compose.yml build.context for 'app')
+      # file: Dockerfile → root Dockerfile (multi-stage: vite build + node:20-slim)
+      # The app build context is kept small by .dockerignore which excludes
+      # buildroot/, worker/, node_modules, .git, etc.
+      - name: Build app image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.APP_IMAGE }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-app
+          cache-to:   type=local,dest=/tmp/.buildx-cache-app-new,mode=max
+
+      # ── Build worker image ────────────────────────────────────────────────────
+      # context: worker/ → as declared in docker-compose.yml build.context for 'worker'
+      # This step is skipped when skip_worker_rebuild=true AND a tarball was restored.
+      - name: Build worker image
+        if: ${{ github.event.inputs.skip_worker_rebuild != 'true' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: worker
+          file: worker/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.WORKER_IMAGE }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-worker
+          cache-to:   type=local,dest=/tmp/.buildx-cache-worker-new,mode=max
+
+      # Load the restored tarball into the daemon (skip_worker_rebuild=true path)
+      - name: Load cached worker image into daemon
+        if: >
+          github.event.inputs.skip_worker_rebuild == 'true' &&
+          steps.restore-worker-tarball.outputs.cache-hit == 'true'
+        run: |
+          echo "Loading cached worker image from tarball…"
+          gunzip -c "${IMAGES_DIR}/${WORKER_IMAGE}.tar.gz" | docker load
+          echo "Worker image loaded:"
+          docker image inspect ${WORKER_IMAGE}:latest --format '  id: {{.Id}}'
+
+      # Rotate layer caches to prevent unbounded growth
+      - name: Rotate build caches
+        run: |
+          rm -rf /tmp/.buildx-cache-app    && mv /tmp/.buildx-cache-app-new    /tmp/.buildx-cache-app    2>/dev/null || true
+          rm -rf /tmp/.buildx-cache-worker && mv /tmp/.buildx-cache-worker-new /tmp/.buildx-cache-worker 2>/dev/null || true
+
+      # ── Verify ────────────────────────────────────────────────────────────────
+      - name: Verify both images are present
+        run: |
+          echo "── Images in daemon ───────────────────────────────────────────"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" \
+            | grep -E "REPOSITORY|${APP_IMAGE}|${WORKER_IMAGE}"
+          echo ""
+          docker image inspect ${APP_IMAGE}:latest \
+            --format 'app    → id={{.Id}}  size={{.Size}}' \
+            || { echo "ERROR: ${APP_IMAGE}:latest not found in daemon"; exit 1; }
+          docker image inspect ${WORKER_IMAGE}:latest \
+            --format 'worker → id={{.Id}}  size={{.Size}}' \
+            || { echo "ERROR: ${WORKER_IMAGE}:latest not found in daemon"; exit 1; }
+
+      # ── Save images as gzip-compressed tarballs ───────────────────────────────
+      # Piping docker save directly into gzip is faster than saving uncompressed
+      # first (avoids writing the full uncompressed layer to disk twice).
+      # These tarballs are:
+      #   1. Uploaded as a workflow artifact → consumed by job 2
+      #   2. Cached by key → restored by skip_worker_rebuild in future runs
+      - name: Save app image to tarball
+        run: |
+          mkdir -p "${IMAGES_DIR}"
+          echo "Saving ${APP_IMAGE}:latest …"
+          docker save ${APP_IMAGE}:latest | gzip > "${IMAGES_DIR}/${APP_IMAGE}.tar.gz"
+          echo "  $(du -sh ${IMAGES_DIR}/${APP_IMAGE}.tar.gz | cut -f1)  ← ${APP_IMAGE}.tar.gz"
+
+      - name: Save worker image to tarball
+        if: ${{ github.event.inputs.skip_worker_rebuild != 'true' }}
+        run: |
+          mkdir -p "${IMAGES_DIR}"
+          echo "Saving ${WORKER_IMAGE}:latest …"
+          docker save ${WORKER_IMAGE}:latest | gzip > "${IMAGES_DIR}/${WORKER_IMAGE}.tar.gz"
+          echo "  $(du -sh ${IMAGES_DIR}/${WORKER_IMAGE}.tar.gz | cut -f1)  ← ${WORKER_IMAGE}.tar.gz"
+
+      # Persist the worker tarball in Actions cache so skip_worker_rebuild can
+      # restore it in future runs without rebuilding the image from scratch.
+      - name: Cache worker tarball for future runs
+        if: ${{ github.event.inputs.skip_worker_rebuild != 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.IMAGES_DIR }}/${{ env.WORKER_IMAGE }}.tar.gz
+          key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
+
+      # ── Record metadata for the release notes ────────────────────────────────
+      - name: Record image metadata
+        run: |
+          mkdir -p "${IMAGES_DIR}"
+          {
+            echo "app_digest=$(docker image inspect ${APP_IMAGE}:latest    --format '{{.Id}}')"
+            echo "worker_digest=$(docker image inspect ${WORKER_IMAGE}:latest --format '{{.Id}}')"
+            echo "app_size=$(du -sh    ${IMAGES_DIR}/${APP_IMAGE}.tar.gz    | cut -f1)"
+            echo "worker_size=$(du -sh ${IMAGES_DIR}/${WORKER_IMAGE}.tar.gz | cut -f1)"
+          } > "${IMAGES_DIR}/image-meta.env"
+          echo "── image-meta.env ─────────────────────────────────────────────"
+          cat "${IMAGES_DIR}/image-meta.env"
+
+      # ── Upload tarballs → job 2 ───────────────────────────────────────────────
+      # Job 2 downloads this artifact before running Buildroot so post-build.sh
+      # finds the tarballs at IMAGES_DIR and copies them into /var/lib/docker-preload/.
+      - name: Upload Docker image tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: |
+            ${{ env.IMAGES_DIR }}/*.tar.gz
+            ${{ env.IMAGES_DIR }}/image-meta.env
+          retention-days: 3      # Temporary hand-off; OVA artifact is the real output
+          compression-level: 0   # Already gzip'd — re-compressing wastes CPU
+
+
+  # ===========================================================================
+  # JOB 2 — Build Buildroot Linux and assemble the OVA
+  #
+  # Receives the Docker image tarballs from job 1.
+  # The Buildroot post-build.sh:
+  #   - Downloads Docker CE static binaries into the rootfs
+  #   - Copies *.tar.gz → /var/lib/docker-preload/ in the rootfs
+  # The Buildroot post-image.sh then:
+  #   - Runs genimage → raw GPT disk image
+  #   - qemu-img convert → stream-optimised VMDK
+  #   - Renders the OVF template and writes the .mf manifest
+  #   - tar(ovf + mf + vmdk) → .ova
+  # ===========================================================================
+  build-ova:
+    name: "2/2 · Build Buildroot OVA"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    needs: build-images
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────────
+      # Needs: buildroot/external/** (defconfig, overlay, board scripts, package)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Restore Docker image tarballs from job 1 ─────────────────────────────
+      - name: Download Docker image tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+          path: ${{ env.IMAGES_DIR }}
+
+      - name: Verify image tarballs
+        run: |
+          echo "── Tarballs received from job 1 ───────────────────────────────"
+          ls -lh "${IMAGES_DIR}/"
+          test -f "${IMAGES_DIR}/${APP_IMAGE}.tar.gz" \
+            || { echo "ERROR: ${APP_IMAGE}.tar.gz missing"; exit 1; }
+          test -f "${IMAGES_DIR}/${WORKER_IMAGE}.tar.gz" \
+            || { echo "ERROR: ${WORKER_IMAGE}.tar.gz missing"; exit 1; }
+
+      # ── System dependencies ───────────────────────────────────────────────────
+      - name: Install Buildroot build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git curl wget python3 \
+            libncurses-dev libssl-dev libelf-dev \
+            bison flex gawk \
+            cpio rsync bc file unzip \
+            qemu-utils \
+            mtools dosfstools e2fsprogs \
+            ca-certificates
+          echo "── Tool versions ──────────────────────────────────────────────"
+          qemu-img --version | head -1
+          python3 --version
+
+      # genimage is not in Ubuntu 22.04 apt — build from source (~2 min, cached below)
+      - name: Build & install genimage
+        run: |
+          if ! command -v genimage &>/dev/null; then
+            sudo apt-get install -y --no-install-recommends \
+              autoconf automake libtool pkg-config libconfuse-dev
+            git clone --depth=1 https://github.com/pengutronix/genimage.git /tmp/genimage
+            cd /tmp/genimage && ./autogen.sh && ./configure && make -j$(nproc) && sudo make install
+          fi
+          genimage --version
+
+      # ── Buildroot source cache ────────────────────────────────────────────────
+      # Cache the extracted source tree — saves re-extracting 400 MB on each run.
+      - name: Cache Buildroot source tree
+        id: cache-br-src
+        uses: actions/cache@v4
+        with:
+          path: buildroot-${{ env.BUILDROOT_VERSION }}
+          key: br-src-${{ env.BUILDROOT_VERSION }}
+
+      - name: Download & extract Buildroot ${{ env.BUILDROOT_VERSION }}
+        if: steps.cache-br-src.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading Buildroot ${BUILDROOT_VERSION}…"
+          curl -fL \
+            "https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.gz" \
+            -o "/tmp/buildroot-${BUILDROOT_VERSION}.tar.gz"
+          tar -xzf "/tmp/buildroot-${BUILDROOT_VERSION}.tar.gz"
+          echo "Extracted."
+
+      # ── Buildroot package download cache ─────────────────────────────────────
+      # dl/ holds source tarballs for every Buildroot package (Linux kernel,
+      # busybox, systemd, openssl…). Caching saves ~500 MB of downloads and
+      # ~10 min per run. Keyed on defconfig so a package version bump busts it.
+      - name: Cache Buildroot package downloads
+        uses: actions/cache@v4
+        with:
+          path: downloads
+          key: br-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig') }}
+          restore-keys: |
+            br-dl-${{ env.BUILDROOT_VERSION }}-
+
+      # ── Apply defconfig ───────────────────────────────────────────────────────
+      - name: Apply defconfig
+        run: |
+          make -C "buildroot-${BUILDROOT_VERSION}" \
+            BR2_EXTERNAL="${GITHUB_WORKSPACE}/buildroot/external" \
+            O="${GITHUB_WORKSPACE}/output" \
+            asbuiltreport_manager_defconfig
+          echo "── Key config options ─────────────────────────────────────────"
+          grep -E "^BR2_(ARCH|INIT_SYSTEMD|TOOLCHAIN_BUILDROOT_MUSL|LINUX_KERNEL_LATEST|TARGET_ROOTFS_EXT2_SIZE)" \
+            output/.config | sort
+
+      # ── Build ─────────────────────────────────────────────────────────────────
+      # Buildroot invokes post-build.sh (injects Docker CE + image tarballs)
+      # then post-image.sh (assembles GPT disk → VMDK → .ova).
+      - name: Build OVA
+        run: |
+          make -C "buildroot-${BUILDROOT_VERSION}" \
+            BR2_EXTERNAL="${GITHUB_WORKSPACE}/buildroot/external" \
+            O="${GITHUB_WORKSPACE}/output" \
+            BR2_DL_DIR="${GITHUB_WORKSPACE}/downloads" \
+            -j$(nproc)
+        env:
+          DOCKER_VERSION:  ${{ env.DOCKER_VERSION }}
+          COMPOSE_VERSION: ${{ env.COMPOSE_VERSION }}
+
+      # ── Verify OVA ───────────────────────────────────────────────────────────
+      - name: Verify OVA output
+        run: |
+          echo "── Output directory ───────────────────────────────────────────"
+          ls -lh output/images/
+
+          OVA=$(ls output/images/asbuiltreport-manager-v*.ova 2>/dev/null | head -1)
+          [[ -n "${OVA}" ]] || { echo "ERROR: No .ova found in output/images/"; exit 1; }
+
+          echo ""
+          echo "── OVA contents (must be: .ovf first, then .mf, then .vmdk) ──"
+          tar -tvf "${OVA}"
+
+          echo ""
+          echo "── SHA256 ─────────────────────────────────────────────────────"
+          sha256sum "${OVA}"
+
+      # ── Version string ────────────────────────────────────────────────────────
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+          else
+            VER="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VER}" >> "${GITHUB_OUTPUT}"
+          echo "Version: ${VER}"
+
+      # ── Read image metadata from job 1 ───────────────────────────────────────
+      - name: Load image metadata
+        id: meta
+        run: |
+          META="${IMAGES_DIR}/image-meta.env"
+          [[ -f "${META}" ]] || { echo "No image-meta.env found"; exit 0; }
+          while IFS='=' read -r key value; do
+            [[ -n "${key}" ]] && echo "${key}=${value}" >> "${GITHUB_OUTPUT}"
+          done < "${META}"
+
+      # ── Upload OVA artifact ───────────────────────────────────────────────────
+      - name: Upload OVA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: asbuiltreport-manager-ova-${{ steps.version.outputs.version }}
+          path: |
+            output/images/asbuiltreport-manager-*.ova
+            output/images/asbuiltreport-manager-*.sha256
+          retention-days: 30
+          compression-level: 0    # VMDK stream-compressed inside; skip re-compression
+
+      # ── GitHub Release (tag builds only) ─────────────────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            output/images/asbuiltreport-manager-*.ova
+            output/images/asbuiltreport-manager-*.sha256
+          body: |
+            ## AsBuiltReport Manager ${{ steps.version.outputs.version }}
+
+            ### What's in the OVA
+
+            | Component  | Details |
+            |------------|---------|
+            | Base OS    | Buildroot Linux (musl libc) |
+            | Kernel     | Linux 6.6 LTS |
+            | Runtime    | Docker CE ${{ env.DOCKER_VERSION }} + Compose plugin ${{ env.COMPOSE_VERSION }} |
+            | App        | `asbuiltreport-app` — node:20-slim · Express + React · port 3001 |
+            | Worker     | `asbuiltreport-worker` — Rocky Linux 9 · PowerShell 7 · PowerCLI · Veeam.Backup.PowerShell · 16 ABR modules |
+            | Auto-start | systemd on boot |
+
+            ### VM Specifications
+
+            | Resource | Value   |
+            |----------|---------|
+            | vCPU     | 4       |
+            | RAM      | 8 GB    |
+            | Disk     | 40 GB   |
+            | NIC      | VMXNET3 |
+
+            ### Deployment
+
+            1. Import into VMware vCenter / ESXi / Workstation / Fusion
+            2. Fill in OVF properties at deploy time:
+               - **Hostname** (e.g. `abr.company.local`)
+               - **IP Address** in CIDR notation — leave blank for DHCP
+               - **Gateway** and **DNS servers**
+               - **Root password**
+               - **SSH authorised key** (optional)
+            3. Power on — stack starts automatically (~2 min first boot)
+            4. Browse to `http://<vm-ip>:3001`
+
+            ### Image digests
+
+            | Image | Digest |
+            |-------|--------|
+            | `asbuiltreport-app` | `${{ steps.meta.outputs.app_digest }}` |
+            | `asbuiltreport-worker` | `${{ steps.meta.outputs.worker_digest }}` |
+
+            | Image | Compressed size |
+            |-------|----------------|
+            | `asbuiltreport-app` | ${{ steps.meta.outputs.app_size }} |
+            | `asbuiltreport-worker` | ${{ steps.meta.outputs.worker_size }} |

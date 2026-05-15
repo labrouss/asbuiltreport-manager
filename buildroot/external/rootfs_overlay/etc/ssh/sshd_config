@@ -1,0 +1,22 @@
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+# Authentication
+PermitRootLogin prohibit-password
+PasswordAuthentication yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# Security
+X11Forwarding no
+PrintMotd yes
+AcceptEnv LANG LC_*
+
+# Session
+LoginGraceTime 60
+MaxAuthTries 6
+MaxSessions 10
+
+Subsystem sftp /usr/lib/ssh/sftp-server

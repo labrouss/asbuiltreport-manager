@@ -1,0 +1,20 @@
+[Unit]
+Description=AsBuiltReport Manager — First Boot Initialisation
+Documentation=https://www.asbuiltreport.com
+# Run after Docker is ready but before the main compose service
+After=docker.service network-online.target
+Requires=docker.service
+Before=asbuiltreport-manager.service
+# Only run if the sentinel file does not exist
+ConditionPathExists=!/var/lib/asbuiltreport/.first-boot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=600
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/usr/local/bin/abr-first-boot.sh
+
+[Install]
+WantedBy=multi-user.target

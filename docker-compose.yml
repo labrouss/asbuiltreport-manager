@@ -1,0 +1,83 @@
+name: asbuiltreport-manager
+
+services:
+  # ── Frontend / API ──────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: asbuiltreport-app:latest       # explicit tag — stable name for docker save/load
+    container_name: asbuiltreport-app
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      REPORTS_DIR: /var/www/reports
+      WORKER_URL: http://worker:8080
+    volumes:
+      - reports_data:/var/www/reports
+      - config_data:/etc/asbuiltreport
+    depends_on:
+      worker:
+        condition: service_healthy
+    networks:
+      - abr-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health/dependencies"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── PowerShell Worker ───────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    image: asbuiltreport-worker:latest    # explicit tag — stable name for docker save/load
+    container_name: asbuiltreport-worker
+    restart: unless-stopped
+    expose:
+      - "8080"
+    volumes:
+      - reports_data:/var/www/reports
+      - config_data:/etc/asbuiltreport
+      - ps_modules:/root/.local/share/powershell/Modules
+    environment:
+      REPORTS_DIR: /var/www/reports
+    networks:
+      - abr-net
+    healthcheck:
+      test: ["CMD", "pwsh", "-Command", "Invoke-WebRequest -Uri http://localhost:8080/health -UseBasicParsing | Select-Object -ExpandProperty StatusCode"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+
+networks:
+  abr-net:
+    driver: bridge
+
+volumes:
+  reports_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/www/reports
+
+  config_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/asbuiltreport
+
+  ps_modules:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/asbuiltreport/ps-modules
