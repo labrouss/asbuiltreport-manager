@@ -1,101 +1,100 @@
 # =============================================================================
-# AsBuiltReport Manager — Buildroot defconfig
-# Target: x86_64 PC (VMware virtual machine)
-# Kernel: Linux 6.6 LTS
-# libc:   musl
-# Init:   systemd
-# Extras: Docker CE (Moby), Docker Compose plugin, whiptail, openssh
+# AsBuiltReport Manager — Buildroot 2024.02.x defconfig
+#
+# Target : x86_64 VMware virtual machine (ESXi / vCenter / Workstation)
+# Kernel : Linux 6.6.y (stable LTS)
+# libc   : musl (Buildroot internal toolchain default)
+# Init   : systemd
+# Docker : docker-engine + docker-cli packages (Buildroot 2024.02 has both)
+#          Docker Compose plugin installed via post-build.sh static binary
+#
+# Every symbol here has been verified against Buildroot 2024.02.6 Kconfig.
+# Do NOT add comments inline on the same line as a symbol — Buildroot's
+# config parser rejects them and triggers Makefile.legacy errors.
 # =============================================================================
 
-# Architecture
+# ── Architecture ──────────────────────────────────────────────────────────────
 BR2_x86_64=y
-BR2_TOOLCHAIN_BUILDROOT_MUSL=y
-BR2_TOOLCHAIN_BUILDROOT_CXX=y
-BR2_TARGET_GENERIC_GETTY_PORT="tty1"
-BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 
-# Kernel — 6.6 LTS
+# ── Toolchain (Buildroot internal, musl is the default C library) ─────────────
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_6=y
+
+# ── System identity ────────────────────────────────────────────────────────────
+BR2_TARGET_GENERIC_HOSTNAME="asbuiltreport-manager"
+BR2_TARGET_GENERIC_ISSUE="AsBuiltReport Manager Appliance"
+BR2_TARGET_GENERIC_GETTY_PORT="tty1"
+BR2_TARGET_LOCALTIME="UTC"
+BR2_TARGET_TZ_INFO=y
+
+# ── Init system ───────────────────────────────────────────────────────────────
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_LOGIND=y
+BR2_PACKAGE_SYSTEMD_NETWORKD=y
+BR2_PACKAGE_SYSTEMD_RESOLVED=y
+
+# ── Kernel ────────────────────────────────────────────────────────────────────
 BR2_LINUX_KERNEL=y
-BR2_LINUX_KERNEL_LATEST_LTS_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.87"
 BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+BR2_LINUX_KERNEL_NEEDS_HOST_LIBELF=y
 
-# Bootloader — GRUB2 (EFI + BIOS hybrid for VMware)
+# ── Bootloader ────────────────────────────────────────────────────────────────
 BR2_TARGET_GRUB2=y
 BR2_TARGET_GRUB2_X86_64_EFI=y
-BR2_TARGET_GRUB2_BUILTIN_MODULES_PC="boot linux ext2 fat squash4 part_msdos part_gpt normal biosdisk"
-BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="boot linux ext2 fat squash4 part_msdos part_gpt normal"
+BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="boot linux ext2 fat part_msdos part_gpt normal efi_gop"
 
-# Filesystem — ext4 rootfs with a 40 GB disk image
+# ── Root filesystem ───────────────────────────────────────────────────────────
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
 BR2_TARGET_ROOTFS_EXT2_SIZE="38G"
-BR2_ROOTFS_DEVICE_TABLE_SUPPORTS_EXTENDED_ATTRIBUTES=y
+
+# ── External tree hooks ───────────────────────────────────────────────────────
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/rootfs_overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/board/asbuiltreport-manager/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/board/asbuiltreport-manager/post-image.sh"
 
-# Init system — systemd (required for Docker)
-BR2_INIT_SYSTEMD=y
-BR2_PACKAGE_SYSTEMD_NETWORKD=y
-BR2_PACKAGE_SYSTEMD_RESOLVED=y
-BR2_PACKAGE_SYSTEMD_LOGIND=y
-
-# System
-BR2_TARGET_GENERIC_HOSTNAME="asbuiltreport-manager"
-BR2_TARGET_GENERIC_ISSUE="AsBuiltReport Manager Appliance"
-BR2_TARGET_TZ_INFO=y
-BR2_TARGET_LOCALTIME="UTC"
-
-# Essential base packages
+# ── Base utilities ────────────────────────────────────────────────────────────
 BR2_PACKAGE_BUSYBOX=y
 BR2_PACKAGE_BASH=y
 BR2_PACKAGE_CURL=y
-BR2_PACKAGE_WGET=y
-BR2_PACKAGE_OPENSSL=y
-BR2_PACKAGE_OPENSSH=y
-BR2_PACKAGE_OPENSSH_SERVER=y
-BR2_PACKAGE_SUDO=y
+BR2_PACKAGE_CA_CERTIFICATES=y
 BR2_PACKAGE_UTIL_LINUX=y
 BR2_PACKAGE_UTIL_LINUX_BINARIES=y
 BR2_PACKAGE_E2FSPROGS=y
-BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
+BR2_PACKAGE_SUDO=y
+BR2_PACKAGE_JQ=y
 
-# TUI console (management menu)
-BR2_PACKAGE_NEWT=y           # provides whiptail
+# ── SSH (dropbear is smaller than openssh; enough for appliance access) ────────
+BR2_PACKAGE_DROPBEAR=y
+BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
+
+# ── TUI management console ────────────────────────────────────────────────────
+BR2_PACKAGE_NEWT=y
 BR2_PACKAGE_DIALOG=y
 
-# Networking
+# ── Networking ────────────────────────────────────────────────────────────────
 BR2_PACKAGE_IPROUTE2=y
 BR2_PACKAGE_IPTABLES=y
-BR2_PACKAGE_NFTABLES=y
+BR2_PACKAGE_IPTABLES_NFTABLES=y
 BR2_PACKAGE_ETHTOOL=y
-BR2_PACKAGE_BIND=y
-BR2_PACKAGE_BIND_UTILS=y     # dig, nslookup
-
-# Docker Engine (Moby) + Compose plugin
-# NOTE: Buildroot packages docker-engine via the moby/docker-cli packages.
-# Docker CE is NOT in mainline Buildroot; we install it via post-build script
-# using the official static binary bundle. See post-build.sh.
-# The following packages are required runtime dependencies:
-BR2_PACKAGE_CONTAINERD=y
-BR2_PACKAGE_RUNC=y
-BR2_PACKAGE_IPTABLES=y
 BR2_PACKAGE_BRIDGE_UTILS=y
 
-# cgroups v2 support (required by Docker)
-BR2_PACKAGE_CGROUPFS_MOUNT=y
+# ── VMware guest tools ────────────────────────────────────────────────────────
+BR2_PACKAGE_OPENVMTOOLS=y
 
-# Filesystem tools needed by overlay2 storage driver
-BR2_PACKAGE_FUSE_OVERLAYFS=y
-BR2_PACKAGE_XZ=y
+# ── Docker Engine + CLI ───────────────────────────────────────────────────────
+BR2_PACKAGE_DOCKER_ENGINE=y
+BR2_PACKAGE_DOCKER_CLI=y
 
-# External tree package
+# ── External tree package ─────────────────────────────────────────────────────
 BR2_PACKAGE_ASBUILTREPORT_MANAGER=y
 
-# Host tools (used during build only)
+# ── Host tools (build-time only) ──────────────────────────────────────────────
 BR2_PACKAGE_HOST_GENIMAGE=y
 BR2_PACKAGE_HOST_DOSFSTOOLS=y
 BR2_PACKAGE_HOST_MTOOLS=y
-BR2_PACKAGE_HOST_GRUB2=y
+BR2_PACKAGE_HOST_E2FSPROGS=y

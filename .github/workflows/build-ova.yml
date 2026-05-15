@@ -342,10 +342,13 @@ jobs:
             BR2_EXTERNAL="${GITHUB_WORKSPACE}/buildroot/external" \
             O="${GITHUB_WORKSPACE}/output" \
             asbuiltreport_manager_defconfig
-          echo "── Key config options ─────────────────────────────────────────"
-          grep -E "^BR2_(ARCH|INIT_SYSTEMD|TOOLCHAIN_BUILDROOT_MUSL|LINUX_KERNEL_LATEST|TARGET_ROOTFS_EXT2_SIZE)" \
+          echo "Key config options:"
+          grep -E "^BR2_(x86_64|INIT_SYSTEMD|LINUX_KERNEL_CUSTOM_VERSION_VALUE|TARGET_ROOTFS_EXT2_SIZE|PACKAGE_DOCKER)" \
             output/.config | sort
-
+          echo ""
+          echo "Checking for legacy symbols (should be empty):"
+          grep -E "BR2_TOOLCHAIN_BUILDROOT_MUSL|BR2_LINUX_KERNEL_LATEST_LTS|BR2_PACKAGE_CONTAINERD=|BR2_PACKAGE_RUNC=|BR2_PACKAGE_CGROUPFS" \
+            output/.config || echo "  none found - config is clean"
       # ── Build ─────────────────────────────────────────────────────────────────
       # Buildroot invokes post-build.sh (injects Docker CE + image tarballs)
       # then post-image.sh (assembles GPT disk → VMDK → .ova).
