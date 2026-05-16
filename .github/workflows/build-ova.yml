@@ -287,7 +287,7 @@ jobs:
             bison flex gawk \
             cpio rsync bc file unzip \
             qemu-utils \
-            mtools dosfstools e2fsprogs \
+            mtools dosfstools e2fsprogs genext2fs \
             ca-certificates
           echo "── Tool versions ──────────────────────────────────────────────"
           qemu-img --version | head -1
