@@ -25,17 +25,45 @@ GENIMAGE_CFG="${EXTERNAL}/board/asbuiltreport-manager/genimage.cfg"
 OVF_TEMPLATE="${EXTERNAL}/board/asbuiltreport-manager/asbuiltreport-manager.ovf.template"
 
 info()  { echo "[post-image] INFO:  $*"; }
+warn()  { echo "[post-image] WARN:  $*" >&2; }
 error() { echo "[post-image] ERROR: $*" >&2; exit 1; }
 
 GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 rm -rf "${GENIMAGE_TMP}"
 
 # =============================================================================
+# 0. Install our grub.cfg into the efi-part directory that Buildroot's
+#    GRUB2 package created. This must happen before genimage runs so that
+#    genimage finds the file when it builds boot.vfat.
+#    Buildroot writes:  output/images/efi-part/EFI/BOOT/bootx64.efi
+#                       output/images/efi-part/EFI/BOOT/grub.cfg  (default)
+#    We overwrite the default grub.cfg with our own.
+# =============================================================================
+EFI_BOOT_DIR="${BINARIES_DIR}/efi-part/EFI/BOOT"
+GRUB_CFG_SRC="${EXTERNAL}/board/asbuiltreport-manager/grub.cfg"
+
+if [[ ! -d "${EFI_BOOT_DIR}" ]]; then
+    error "GRUB2 EFI output directory not found: ${EFI_BOOT_DIR}"
+    error "Ensure BR2_TARGET_GRUB2_X86_64_EFI=y is set in the defconfig."
+fi
+
+if [[ -f "${GRUB_CFG_SRC}" ]]; then
+    info "Installing grub.cfg → ${EFI_BOOT_DIR}/grub.cfg"
+    cp "${GRUB_CFG_SRC}" "${EFI_BOOT_DIR}/grub.cfg"
+else
+    warn "No custom grub.cfg found at ${GRUB_CFG_SRC} — using Buildroot default."
+fi
+
+info "EFI boot directory contents:"
+ls -lh "${EFI_BOOT_DIR}/"
+
+# =============================================================================
 # 1. genimage → raw GPT disk image
 # =============================================================================
 info "Running genimage..."
+# Buildroot exports TARGET_DIR to post-image.sh via the environment.
 genimage \
-    --rootpath   "${TARGET_DIR}" \
+    --rootpath   "${TARGET_DIR:-${BINARIES_DIR}/../target}" \
     --tmppath    "${GENIMAGE_TMP}" \
     --inputpath  "${BINARIES_DIR}" \
     --outputpath "${BINARIES_DIR}" \
