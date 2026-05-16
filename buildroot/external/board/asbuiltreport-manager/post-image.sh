@@ -2,15 +2,24 @@
 # =============================================================================
 # post-image.sh — AsBuiltReport Manager OVA
 #
-# Runs after all Buildroot filesystem images are written.
-# Mirrors san-manager post-image.sh pattern.
-#
 # Steps:
-#   1. genimage  → raw GPT disk image  (asbuiltreport-manager.img)
-#   2. qemu-img  → stream-optimised VMDK
-#   3. Render OVF template → .ovf
+#   0. Install grub.cfg into efi-part/
+#   1. genimage   → raw GPT disk image (.img)
+#   2. qemu-img   → monolithic flat VMDK  (NOT stream-optimised)
+#   3. Render OVF → .ovf  (disk sizes taken from the flat VMDK)
 #   4. SHA256 manifest → .mf
 #   5. tar(ovf + mf + vmdk) → .ova
+#
+# VMDK format choice — ESXi compatibility matrix:
+#   streamOptimized  → transport-only; ESXi cannot attach/clone directly.
+#                      Requires ovftool to convert after import. AVOID.
+#   monolithicFlat   → single flat .vmdk + descriptor file; ESXi attaches
+#                      natively but OVA packaging requires both files. AVOID.
+#   monolithicSparse → single self-contained .vmdk; ESXi attaches natively,
+#                      ovftool-compatible, accepted by vCenter OVF import. USE.
+#
+# We use monolithicSparse (subformat=monolithicSparse in qemu-img).
+# vCenter accepts this for OVF import and ESXi can attach/clone it directly.
 # =============================================================================
 set -euo pipefail
 
@@ -32,36 +41,26 @@ GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 rm -rf "${GENIMAGE_TMP}"
 
 # =============================================================================
-# 0. Install our grub.cfg into the efi-part directory that Buildroot's
-#    GRUB2 package created. This must happen before genimage runs so that
-#    genimage finds the file when it builds boot.vfat.
-#    Buildroot writes:  output/images/efi-part/EFI/BOOT/bootx64.efi
-#                       output/images/efi-part/EFI/BOOT/grub.cfg  (default)
-#    We overwrite the default grub.cfg with our own.
+# 0. Install our grub.cfg into the efi-part/ directory
 # =============================================================================
 EFI_BOOT_DIR="${BINARIES_DIR}/efi-part/EFI/BOOT"
 GRUB_CFG_SRC="${EXTERNAL}/board/asbuiltreport-manager/grub.cfg"
 
-if [[ ! -d "${EFI_BOOT_DIR}" ]]; then
-    error "GRUB2 EFI output directory not found: ${EFI_BOOT_DIR}"
-    error "Ensure BR2_TARGET_GRUB2_X86_64_EFI=y is set in the defconfig."
-fi
+[[ -d "${EFI_BOOT_DIR}" ]] \
+    || error "GRUB2 EFI output dir not found: ${EFI_BOOT_DIR}"
 
 if [[ -f "${GRUB_CFG_SRC}" ]]; then
-    info "Installing grub.cfg → ${EFI_BOOT_DIR}/grub.cfg"
     cp "${GRUB_CFG_SRC}" "${EFI_BOOT_DIR}/grub.cfg"
+    info "grub.cfg installed → ${EFI_BOOT_DIR}/grub.cfg"
 else
-    warn "No custom grub.cfg found at ${GRUB_CFG_SRC} — using Buildroot default."
+    warn "No custom grub.cfg — using Buildroot default."
 fi
-
-info "EFI boot directory contents:"
 ls -lh "${EFI_BOOT_DIR}/"
 
 # =============================================================================
 # 1. genimage → raw GPT disk image
 # =============================================================================
 info "Running genimage..."
-# Buildroot exports TARGET_DIR to post-image.sh via the environment.
 genimage \
     --rootpath   "${TARGET_DIR:-${BINARIES_DIR}/../target}" \
     --tmppath    "${GENIMAGE_TMP}" \
@@ -71,28 +70,49 @@ genimage \
 
 RAW_IMG="${BINARIES_DIR}/${APPLIANCE_NAME}.img"
 [[ -f "${RAW_IMG}" ]] || error "genimage did not produce ${RAW_IMG}"
-info "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)"
+RAW_SIZE_BYTES=$(stat -c %s "${RAW_IMG}")
+info "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)  (${RAW_SIZE_BYTES} bytes)"
 
 # =============================================================================
-# 2. qemu-img → stream-optimised VMDK
+# 2. qemu-img → monolithicSparse VMDK
+#
+# monolithicSparse is a single self-contained VMDK file that:
+#   - vCenter accepts for OVF/OVA import  (unlike streamOptimized which
+#     vCenter's transfer layer often rejects for large disks)
+#   - ESXi can attach and clone directly  (unlike streamOptimized)
+#   - Is sparse so only allocated blocks occupy space on the datastore
+#
+# adapter_type=lsilogic matches the SCSI controller declared in the OVF.
+# hwversion=8 is the minimum that vSphere 6.x/7.x/8.x all accept.
 # =============================================================================
 VMDK="${BINARIES_DIR}/${APPLIANCE_NAME}-disk1.vmdk"
-info "Converting to stream-optimised VMDK..."
+info "Converting raw → monolithicSparse VMDK..."
 qemu-img convert \
     -f raw \
     -O vmdk \
-    -o subformat=streamOptimized,adapter_type=lsilogic \
+    -o subformat=monolithicSparse,adapter_type=lsilogic,hwversion=17 \
     "${RAW_IMG}" \
     "${VMDK}"
 
-DISK_SIZE_BYTES=$(qemu-img info --output=json "${VMDK}" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['virtual-size'])")
+# Verify the VMDK was written completely
+[[ -f "${VMDK}" ]] || error "qemu-img did not produce ${VMDK}"
+
+VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
+[[ "${VMDK_SIZE_BYTES}" -gt 0 ]] || error "VMDK is empty — conversion failed"
+
+# Read virtual size from the raw image (not the VMDK — avoids sparse confusion)
+DISK_SIZE_BYTES=${RAW_SIZE_BYTES}
 DISK_SIZE_GIB=$(( DISK_SIZE_BYTES / 1073741824 ))
 DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
-VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
 VMDK_BASENAME=$(basename "${VMDK}")
 
-info "VMDK: virtual=${DISK_SIZE_GIB}GiB  file=${VMDK_SIZE_BYTES}B"
+info "VMDK: virtual=${DISK_SIZE_GIB} GiB  sectors=${DISK_CAPACITY_SECTORS}  file=${VMDK_SIZE_BYTES} bytes"
+
+# Sanity check: virtual size must be at least what genimage was asked for
+EXPECTED_MIN_GIB=39
+if [[ "${DISK_SIZE_GIB}" -lt "${EXPECTED_MIN_GIB}" ]]; then
+    error "VMDK virtual size (${DISK_SIZE_GIB} GiB) is smaller than expected (${EXPECTED_MIN_GIB} GiB). Conversion may have failed."
+fi
 
 # =============================================================================
 # 3. OVF descriptor
@@ -120,22 +140,37 @@ VMDK_SHA256=$(sha256sum "${VMDK}"   | awk '{print $1}')
 } > "${MF_OUT}"
 
 # =============================================================================
-# 5. Package OVA (OVF spec requires .ovf first in the tar)
+# 5. Package OVA
+#
+# OVF spec (DSP0243): the OVF descriptor file MUST be the first file in the
+# tar archive. Use --format=ustar (POSIX tar, no GNU extensions) for maximum
+# compatibility with vCenter's OVA parser.
 # =============================================================================
 info "Packaging OVA: ${OVA_OUT}"
+rm -f "${OVA_OUT}"
 cd "${BINARIES_DIR}"
-tar -cf "${OVA_OUT}" \
+tar \
+    --format=ustar \
+    -cf "${OVA_OUT}" \
     "${APPLIANCE_NAME}.ovf" \
     "${APPLIANCE_NAME}.mf" \
     "${VMDK_BASENAME}"
+
+# Verify the OVA tar is not empty and the VMDK is inside
+OVA_SIZE_BYTES=$(stat -c %s "${OVA_OUT}")
+[[ "${OVA_SIZE_BYTES}" -gt "${VMDK_SIZE_BYTES}" ]] \
+    || error "OVA (${OVA_SIZE_BYTES} bytes) is smaller than the VMDK (${VMDK_SIZE_BYTES} bytes) — packaging failed."
+
+info "OVA contents:"
+tar -tvf "${OVA_OUT}"
 
 OVA_SHA256=$(sha256sum "${OVA_OUT}" | awk '{print $1}')
 OVA_SIZE=$(du -sh "${OVA_OUT}" | cut -f1)
 echo "${OVA_SHA256}  ${APPLIANCE_NAME}-v${VERSION}.ova" \
     > "${BINARIES_DIR}/${APPLIANCE_NAME}-v${VERSION}.ova.sha256"
 
-info "────────────────────────────────────────────────────────"
+info "────────────────────────────────────────────────────────────"
 info " OVA:    ${OVA_OUT}"
 info " Size:   ${OVA_SIZE}"
 info " SHA256: ${OVA_SHA256}"
-info "────────────────────────────────────────────────────────"
+info "────────────────────────────────────────────────────────────"

@@ -41,10 +41,9 @@
     <Disk
         ovf:diskId="vmdisk1"
         ovf:fileRef="disk1"
-        ovf:capacity="@@DISK_SIZE_GIB@@"
-        ovf:capacityAllocationUnits="byte * 2^30"
-        ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
-        ovf:populatedSize="@@VMDK_SIZE_BYTES@@"/>
+        ovf:capacity="@@DISK_CAPACITY_SECTORS@@"
+        ovf:capacityAllocationUnits="byte * 512"
+        ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#sparse"/>
   </DiskSection>
 
   <!-- ── Network Section ── -->
@@ -73,7 +72,7 @@
       <System>
         <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
         <vssd:InstanceID>0</vssd:InstanceID>
-        <vssd:VirtualSystemType>vmx-19</vssd:VirtualSystemType>
+        <vssd:VirtualSystemType>vmx-17</vssd:VirtualSystemType>
       </System>
 
       <!-- CPU: 4 vCPU -->
