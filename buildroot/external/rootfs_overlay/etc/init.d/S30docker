@@ -1,0 +1,44 @@
+#!/bin/sh
+# /etc/init.d/S30docker
+
+DOCKER_OPTS="--storage-driver=overlay2 --log-driver=json-file \
+  --log-opt max-size=50m --log-opt max-file=3 \
+  --iptables=true --ip-forward=true"
+PIDFILE=/var/run/dockerd.pid
+
+case "$1" in
+  start)
+    echo "Starting Docker..."
+    # Ensure cgroups are mounted
+    mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || \
+      mount -t cgroup none /sys/fs/cgroup 2>/dev/null || true
+
+    start-stop-daemon --start --quiet --background \
+      --pidfile "$PIDFILE" --make-pidfile \
+      --exec /usr/bin/dockerd -- $DOCKER_OPTS
+
+    # Wait for Docker socket
+    RETRIES=30
+    while [ ! -S /var/run/docker.sock ] && [ $RETRIES -gt 0 ]; do
+      sleep 1
+      RETRIES=$((RETRIES - 1))
+    done
+
+    if [ -S /var/run/docker.sock ]; then
+      echo "Docker started"
+    else
+      echo "ERROR: Docker socket not available after 30s" >&2
+    fi
+    ;;
+  stop)
+    echo "Stopping Docker..."
+    start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
+    rm -f "$PIDFILE"
+    ;;
+  restart)
+    "$0" stop; sleep 2; "$0" start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac

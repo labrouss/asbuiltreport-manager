@@ -1,0 +1,19 @@
+#!/bin/sh
+# /etc/init.d/S99console
+# Spawns the management console on tty1 via inittab respawn.
+# The actual console script is /usr/local/bin/abr-console.sh
+
+case "$1" in
+  start)
+    # Ensure inittab has the tty1 console entry (idempotent)
+    if ! grep -q "abr-console" /etc/inittab 2>/dev/null; then
+      echo "tty1::respawn:/usr/local/bin/abr-console.sh" >> /etc/inittab
+      kill -HUP 1 2>/dev/null || true
+    fi
+    ;;
+  stop|restart)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac

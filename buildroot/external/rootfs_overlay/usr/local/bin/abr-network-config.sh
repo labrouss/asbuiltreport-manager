@@ -1,78 +1,34 @@
-#!/bin/bash
-# =============================================================================
-# abr-network-config.sh — Network configuration helper
-#
-# Can be called:
-#   abr-network-config dhcp
-#   abr-network-config static <ip-cidr> <gateway> [dns...]
-#
-# Used by both the OVF init script and the management console.
-# =============================================================================
-set -euo pipefail
+#!/bin/sh
+# abr-network-config.sh — network configuration helper
+# Usage:
+#   abr-network-config.sh dhcp
+#   abr-network-config.sh static <IP/PREFIX> <GATEWAY> [DNS...]
 
-NETWORKD_DIR="/etc/systemd/network"
-NETWORK_FILE="${NETWORKD_DIR}/10-eth.network"
+NETCFG="/etc/network/config"
 
-usage() {
-    echo "Usage:"
-    echo "  abr-network-config dhcp"
-    echo "  abr-network-config static <IP/PREFIX> <GATEWAY> [DNS1 DNS2 ...]"
-    exit 1
-}
-
-MODE="${1:-}"
-
-case "${MODE}" in
-    dhcp)
-        mkdir -p "${NETWORKD_DIR}"
-        cat > "${NETWORK_FILE}" <<'EOF'
-[Match]
-Name=en* eth*
-
-[Network]
-DHCP=yes
-IPv6AcceptRA=no
-
-[DHCP]
-UseDNS=yes
-UseDomains=yes
-SendHostname=yes
+case "$1" in
+  dhcp)
+    echo "NETWORK_MODE=dhcp" > "$NETCFG"
+    /etc/init.d/S10network restart
+    echo "DHCP configured."
+    ;;
+  static)
+    IP_CIDR="$2"
+    GATEWAY="$3"
+    shift 3
+    DNS_SERVERS="${*:-8.8.8.8}"
+    [ -n "$IP_CIDR" ] || { echo "Usage: $0 static <IP/PREFIX> <GW> [DNS...]"; exit 1; }
+    cat > "$NETCFG" <<EOF
+NETWORK_MODE=static
+IP_CIDR="$IP_CIDR"
+GATEWAY="$GATEWAY"
+DNS_SERVERS="$DNS_SERVERS"
 EOF
-        echo "DHCP configuration written to ${NETWORK_FILE}"
-        ;;
-
-    static)
-        IP_CIDR="${2:-}"
-        GATEWAY="${3:-}"
-        shift 3 || true
-        DNS_SERVERS=("${@:-8.8.8.8}")
-
-        [[ -n "${IP_CIDR}" ]] || usage
-        [[ -n "${GATEWAY}" ]] || usage
-
-        mkdir -p "${NETWORKD_DIR}"
-        {
-            echo "[Match]"
-            echo "Name=en* eth*"
-            echo ""
-            echo "[Network]"
-            echo "Address=${IP_CIDR}"
-            echo "Gateway=${GATEWAY}"
-            for dns in "${DNS_SERVERS[@]}"; do
-                echo "DNS=${dns}"
-            done
-            echo "LinkLocalAddressing=no"
-        } > "${NETWORK_FILE}"
-        echo "Static IP configuration written to ${NETWORK_FILE}"
-        ;;
-
-    *)
-        usage
-        ;;
+    /etc/init.d/S10network restart
+    echo "Static IP configured: $IP_CIDR"
+    ;;
+  *)
+    echo "Usage: $0 {dhcp|static <IP/PREFIX> <GW> [DNS...]}"
+    exit 1
+    ;;
 esac
-
-# Reload systemd-networkd if it's running
-if systemctl is-active --quiet systemd-networkd; then
-    systemctl restart systemd-networkd
-    echo "systemd-networkd restarted."
-fi

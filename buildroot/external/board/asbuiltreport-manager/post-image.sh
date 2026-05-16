@@ -2,20 +2,21 @@
 # =============================================================================
 # post-image.sh — AsBuiltReport Manager OVA
 #
-# Called by Buildroot after all filesystem images have been generated.
-# This script:
-#   1. Runs genimage to create the final disk VMDK
-#   2. Converts the raw image to VMDK (stream-optimised, VMware-compatible)
-#   3. Generates the OVF descriptor from a template
-#   4. Packages everything into a .ova file (tar)
+# Runs after all Buildroot filesystem images are written.
+# Mirrors san-manager post-image.sh pattern.
 #
-# Requires on build host: genimage, qemu-img, tar
+# Steps:
+#   1. genimage  → raw GPT disk image  (asbuiltreport-manager.img)
+#   2. qemu-img  → stream-optimised VMDK
+#   3. Render OVF template → .ovf
+#   4. SHA256 manifest → .mf
+#   5. tar(ovf + mf + vmdk) → .ova
 # =============================================================================
 set -euo pipefail
 
-BINARIES_DIR="${BINARIES_DIR:?not set}"
-BUILD_DIR="${BUILD_DIR:?not set}"
-EXTERNAL="${BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH:?not set}"
+BINARIES_DIR="${BINARIES_DIR:?}"
+BUILD_DIR="${BUILD_DIR:?}"
+EXTERNAL="${BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH:?}"
 
 APPLIANCE_NAME="asbuiltreport-manager"
 VERSION="1.0.0"
@@ -30,9 +31,9 @@ GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 rm -rf "${GENIMAGE_TMP}"
 
 # =============================================================================
-# 1. Generate raw disk image via genimage
+# 1. genimage → raw GPT disk image
 # =============================================================================
-info "Running genimage…"
+info "Running genimage..."
 genimage \
     --rootpath   "${TARGET_DIR}" \
     --tmppath    "${GENIMAGE_TMP}" \
@@ -42,38 +43,34 @@ genimage \
 
 RAW_IMG="${BINARIES_DIR}/${APPLIANCE_NAME}.img"
 [[ -f "${RAW_IMG}" ]] || error "genimage did not produce ${RAW_IMG}"
+info "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)"
 
 # =============================================================================
-# 2. Convert raw → VMDK (stream-optimised, compatible with ESXi / Workstation)
+# 2. qemu-img → stream-optimised VMDK
 # =============================================================================
 VMDK="${BINARIES_DIR}/${APPLIANCE_NAME}-disk1.vmdk"
-info "Converting disk image to VMDK (stream-optimised)…"
+info "Converting to stream-optimised VMDK..."
 qemu-img convert \
     -f raw \
     -O vmdk \
-    -o subformat=streamOptimized,adapter_type=lsilogic,compat6 \
+    -o subformat=streamOptimized,adapter_type=lsilogic \
     "${RAW_IMG}" \
     "${VMDK}"
 
-DISK_SIZE_BYTES=$(qemu-img info --output=json "${VMDK}" | python3 -c \
-    "import sys,json; d=json.load(sys.stdin); print(d['virtual-size'])")
+DISK_SIZE_BYTES=$(qemu-img info --output=json "${VMDK}" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['virtual-size'])")
 DISK_SIZE_GIB=$(( DISK_SIZE_BYTES / 1073741824 ))
 DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
 VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
-
-info "VMDK: virtual=${DISK_SIZE_GIB} GiB  file=${VMDK_SIZE_BYTES} bytes"
-
-# =============================================================================
-# 3. Generate OVF descriptor from template
-# =============================================================================
-OVF_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}.ovf"
 VMDK_BASENAME=$(basename "${VMDK}")
 
-# Compute SHA256 for the manifest
-VMDK_SHA256=$(sha256sum "${VMDK}" | awk '{print $1}')
-OVF_SHA256=""   # computed after OVF is rendered
+info "VMDK: virtual=${DISK_SIZE_GIB}GiB  file=${VMDK_SIZE_BYTES}B"
 
-info "Rendering OVF descriptor…"
+# =============================================================================
+# 3. OVF descriptor
+# =============================================================================
+OVF_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}.ovf"
+info "Rendering OVF descriptor..."
 sed \
     -e "s|@@APPLIANCE_NAME@@|${APPLIANCE_NAME}|g" \
     -e "s|@@VERSION@@|${VERSION}|g" \
@@ -83,19 +80,19 @@ sed \
     -e "s|@@DISK_SIZE_GIB@@|${DISK_SIZE_GIB}|g" \
     "${OVF_TEMPLATE}" > "${OVF_OUT}"
 
-OVF_SHA256=$(sha256sum "${OVF_OUT}" | awk '{print $1}')
-
 # =============================================================================
-# 4. Write manifest (.mf)
+# 4. Manifest
 # =============================================================================
 MF_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}.mf"
+OVF_SHA256=$(sha256sum "${OVF_OUT}" | awk '{print $1}')
+VMDK_SHA256=$(sha256sum "${VMDK}"   | awk '{print $1}')
 {
     echo "SHA256(${APPLIANCE_NAME}.ovf)= ${OVF_SHA256}"
     echo "SHA256(${VMDK_BASENAME})= ${VMDK_SHA256}"
 } > "${MF_OUT}"
 
 # =============================================================================
-# 5. Package OVA (tar, OVF first as required by the spec)
+# 5. Package OVA (OVF spec requires .ovf first in the tar)
 # =============================================================================
 info "Packaging OVA: ${OVA_OUT}"
 cd "${BINARIES_DIR}"
@@ -104,15 +101,13 @@ tar -cf "${OVA_OUT}" \
     "${APPLIANCE_NAME}.mf" \
     "${VMDK_BASENAME}"
 
-OVA_SIZE=$(du -sh "${OVA_OUT}" | cut -f1)
 OVA_SHA256=$(sha256sum "${OVA_OUT}" | awk '{print $1}')
-
-info "────────────────────────────────────────────────────────"
-info " OVA ready: ${OVA_OUT}"
-info " Size:      ${OVA_SIZE}"
-info " SHA256:    ${OVA_SHA256}"
-info "────────────────────────────────────────────────────────"
-
-# Write checksum file next to the OVA
+OVA_SIZE=$(du -sh "${OVA_OUT}" | cut -f1)
 echo "${OVA_SHA256}  ${APPLIANCE_NAME}-v${VERSION}.ova" \
     > "${BINARIES_DIR}/${APPLIANCE_NAME}-v${VERSION}.ova.sha256"
+
+info "────────────────────────────────────────────────────────"
+info " OVA:    ${OVA_OUT}"
+info " Size:   ${OVA_SIZE}"
+info " SHA256: ${OVA_SHA256}"
+info "────────────────────────────────────────────────────────"

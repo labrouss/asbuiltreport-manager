@@ -1,0 +1,20 @@
+#!/bin/sh
+# /etc/init.d/S20sshd
+
+case "$1" in
+  start)
+    echo "Starting sshd..."
+    [ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A -q
+    /usr/sbin/sshd
+    ;;
+  stop)
+    echo "Stopping sshd..."
+    kill "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null || true
+    ;;
+  restart)
+    "$0" stop; sleep 1; "$0" start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac

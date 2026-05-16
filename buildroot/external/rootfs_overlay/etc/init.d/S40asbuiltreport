@@ -1,0 +1,53 @@
+#!/bin/sh
+# /etc/init.d/S40asbuiltreport
+
+COMPOSE_DIR="/etc/docker/compose/asbuiltreport-manager"
+PRELOAD_DIR="/var/lib/docker-preload"
+SENTINEL="/var/lib/asbuiltreport/.first-boot-done"
+
+case "$1" in
+  start)
+    echo "Starting AsBuiltReport Manager..."
+
+    # ── First boot: load pre-saved images ─────────────────────────────────────
+    if [ ! -f "$SENTINEL" ]; then
+      echo "First boot — loading Docker images..."
+      mkdir -p /var/www/reports /etc/asbuiltreport /var/lib/asbuiltreport/ps-modules
+
+      for img in "$PRELOAD_DIR"/*.tar.gz "$PRELOAD_DIR"/*.tar; do
+        [ -f "$img" ] || continue
+        echo "  Loading: $(basename $img)"
+        case "$img" in
+          *.tar.gz) gunzip -c "$img" | docker load ;;
+          *.tar)    docker load < "$img" ;;
+        esac
+      done
+
+      mkdir -p "$(dirname $SENTINEL)"
+      touch "$SENTINEL"
+      echo "Images loaded."
+    fi
+
+    # ── Start compose stack ────────────────────────────────────────────────────
+    mkdir -p /var/www/reports /etc/asbuiltreport /var/lib/asbuiltreport/ps-modules
+    cd "$COMPOSE_DIR" && docker compose up -d --remove-orphans
+    echo "AsBuiltReport Manager started."
+    ;;
+
+  stop)
+    echo "Stopping AsBuiltReport Manager..."
+    cd "$COMPOSE_DIR" && docker compose down
+    ;;
+
+  restart)
+    "$0" stop; sleep 2; "$0" start
+    ;;
+
+  status)
+    cd "$COMPOSE_DIR" && docker compose ps
+    ;;
+
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+esac
