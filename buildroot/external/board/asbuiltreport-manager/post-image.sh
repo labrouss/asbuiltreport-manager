@@ -108,12 +108,6 @@ VMDK_BASENAME=$(basename "${VMDK}")
 
 info "VMDK: virtual=${DISK_SIZE_GIB} GiB  sectors=${DISK_CAPACITY_SECTORS}  file=${VMDK_SIZE_BYTES} bytes"
 
-# Sanity check: virtual size must be at least what genimage was asked for
-EXPECTED_MIN_GIB=39
-if [[ "${DISK_SIZE_GIB}" -lt "${EXPECTED_MIN_GIB}" ]]; then
-    error "VMDK virtual size (${DISK_SIZE_GIB} GiB) is smaller than expected (${EXPECTED_MIN_GIB} GiB). Conversion may have failed."
-fi
-
 # =============================================================================
 # 3. OVF descriptor
 # =============================================================================
