@@ -1,0 +1,17 @@
+# Ensure shell scripts always have execute permission in the Git index.
+# Without this, git clone on some platforms (GitHub Actions runners, Windows)
+# drops the +x bit and Buildroot's post-build.sh fails with "Permission denied".
+
+buildroot/external/board/asbuiltreport-manager/post-build.sh    text eol=lf
+buildroot/external/board/asbuiltreport-manager/post-image.sh    text eol=lf
+buildroot/external/rootfs_overlay/etc/init.d/S05ovf-init        text eol=lf
+buildroot/external/rootfs_overlay/etc/init.d/S10network         text eol=lf
+buildroot/external/rootfs_overlay/etc/init.d/S20sshd            text eol=lf
+buildroot/external/rootfs_overlay/etc/init.d/S30docker          text eol=lf
+buildroot/external/rootfs_overlay/etc/init.d/S40asbuiltreport   text eol=lf
+buildroot/external/rootfs_overlay/etc/init.d/S99console         text eol=lf
+buildroot/external/rootfs_overlay/usr/local/bin/abr-console.sh       text eol=lf
+buildroot/external/rootfs_overlay/usr/local/bin/abr-first-boot.sh    text eol=lf
+buildroot/external/rootfs_overlay/usr/local/bin/abr-network-config.sh text eol=lf
+buildroot/external/rootfs_overlay/usr/local/bin/abr-ovf-init.sh      text eol=lf
+setup.sh                                                         text eol=lf
