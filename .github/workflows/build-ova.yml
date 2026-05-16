@@ -277,8 +277,8 @@ jobs:
           test -f "${IMAGES_DIR}/${WORKER_IMAGE}.tar.gz" \
             || { echo "ERROR: ${WORKER_IMAGE}.tar.gz missing"; exit 1; }
 
-      # ── System dependencies ───────────────────────────────────────────────────
-      - name: Install Buildroot build dependencies
+      # -- System dependencies -------------------------------------------------------
+      - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -289,12 +289,9 @@ jobs:
             qemu-utils \
             mtools dosfstools e2fsprogs genext2fs \
             ca-certificates
-          echo "── Tool versions ──────────────────────────────────────────────"
           qemu-img --version | head -1
-          python3 --version
 
-      # genimage is not in Ubuntu 22.04 apt — build from source (~2 min, cached below)
-      - name: Build & install genimage
+      - name: Install genimage
         run: |
           if ! command -v genimage &>/dev/null; then
             sudo apt-get install -y --no-install-recommends \
@@ -304,38 +301,7 @@ jobs:
           fi
           genimage --version
 
-      # ── Buildroot source cache ────────────────────────────────────────────────
-      # Cache the extracted source tree — saves re-extracting 400 MB on each run.
-      - name: Cache Buildroot source tree
-        id: cache-br-src
-        uses: actions/cache@v4
-        with:
-          path: buildroot-${{ env.BUILDROOT_VERSION }}
-          key: br-src-${{ env.BUILDROOT_VERSION }}
-
-      - name: Download & extract Buildroot ${{ env.BUILDROOT_VERSION }}
-        if: steps.cache-br-src.outputs.cache-hit != 'true'
-        run: |
-          echo "Downloading Buildroot ${BUILDROOT_VERSION}…"
-          curl -fL \
-            "https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.gz" \
-            -o "/tmp/buildroot-${BUILDROOT_VERSION}.tar.gz"
-          tar -xzf "/tmp/buildroot-${BUILDROOT_VERSION}.tar.gz"
-          echo "Extracted."
-
-      # ── Buildroot package download cache ─────────────────────────────────────
-      # dl/ holds source tarballs for every Buildroot package (Linux kernel,
-      # busybox, systemd, openssl…). Caching saves ~500 MB of downloads and
-      # ~10 min per run. Keyed on defconfig so a package version bump busts it.
-      - name: Cache Buildroot package downloads
-        uses: actions/cache@v4
-        with:
-          path: downloads
-          key: br-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig') }}
-          restore-keys: |
-            br-dl-${{ env.BUILDROOT_VERSION }}-
-
-      # Fix script permissions - git does not preserve +x bits reliably
+      # -- Fix script permissions ------------------------------------------------
       - name: Set execute permissions on board scripts
         run: |
           chmod +x buildroot/external/board/asbuiltreport-manager/post-build.sh
@@ -350,29 +316,126 @@ jobs:
           chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-first-boot.sh
           chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-network-config.sh
           chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-ovf-init.sh
-          echo Permissions set.
 
-      # ── Apply defconfig ───────────────────────────────────────────────────────
+      # -- Buildroot source cache ------------------------------------------------
+      - name: Cache Buildroot source tree
+        id: cache-br-src
+        uses: actions/cache@v4
+        with:
+          path: buildroot-${{ env.BUILDROOT_VERSION }}
+          key: br-src-${{ env.BUILDROOT_VERSION }}
+
+      - name: Download & extract Buildroot
+        if: steps.cache-br-src.outputs.cache-hit != 'true'
+        run: |
+          curl -fL "https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.gz" \
+            -o "/tmp/buildroot-${BUILDROOT_VERSION}.tar.gz"
+          tar -xzf "/tmp/buildroot-${BUILDROOT_VERSION}.tar.gz"
+
+      # -- Buildroot package download cache -------------------------------------
+      - name: Cache Buildroot package downloads
+        uses: actions/cache@v4
+        with:
+          path: downloads
+          key: br-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig') }}
+          restore-keys: |
+            br-dl-${{ env.BUILDROOT_VERSION }}-
+
+      # -- Buildroot output cache (toolchain + compiled packages) ---------------
+      #
+      # Cache key covers every file that determines which packages are compiled:
+      #   - BUILDROOT_VERSION (toolchain, package recipes)
+      #   - defconfig         (package selection)
+      #   - linux fragment    (kernel config)
+      #
+      # Cache HIT  (~3 min): skip the full make entirely; re-run only the two
+      #   post-scripts that inject fresh Docker tarballs and build the OVA.
+      #
+      # Cache MISS (~90 min): full build, then save the output tree.
+      #
+      # output/images/ is intentionally excluded: it holds rootfs.ext2 (38 GB
+      # with baked Docker tarballs) which must always be regenerated with the
+      # fresh tarballs from job 1, and would blow through the 10 GB cache limit.
+      - name: Cache Buildroot output (toolchain + packages)
+        id: cache-br-output
+        uses: actions/cache@v4
+        with:
+          path: |
+            output/build
+            output/host
+            output/staging
+            output/target
+            output/per-package
+            output/.config
+            output/Makefile
+          key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment') }}
+          restore-keys: |
+            br-output-${{ env.BUILDROOT_VERSION }}-
+
+      # -- Apply defconfig (always, cache hit or miss) --------------------------
       - name: Apply defconfig
         run: |
           make -C "buildroot-${BUILDROOT_VERSION}" \
             BR2_EXTERNAL="${GITHUB_WORKSPACE}/buildroot/external" \
             O="${GITHUB_WORKSPACE}/output" \
             asbuiltreport_manager_defconfig
-          # olddefconfig normalises the config and will fail here (not silently
-          # later) if any symbol is still unrecognised / legacy
           make -C "buildroot-${BUILDROOT_VERSION}" \
             BR2_EXTERNAL="${GITHUB_WORKSPACE}/buildroot/external" \
             O="${GITHUB_WORKSPACE}/output" \
             olddefconfig
-          echo "Key config options:"
           grep -E "^BR2_(x86_64|TOOLCHAIN_BUILDROOT_MUSL|LINUX_KERNEL_CUSTOM_VERSION_VALUE|TARGET_ROOTFS_EXT2_SIZE|PACKAGE_DOCKER|PACKAGE_OPEN_VM)" \
             output/.config | sort
-      # ── Build ─────────────────────────────────────────────────────────────────
-      # Buildroot invokes post-build.sh (injects Docker CE + image tarballs)
-      # then post-image.sh (assembles GPT disk → VMDK → .ova).
-      - name: Build OVA
+
+      # -- CACHE HIT: re-run post-scripts only (~3 min) -------------------------
+      #
+      # The compiled target tree is already in output/target from the cache.
+      # Steps:
+      #   1. Re-apply the rootfs overlay (init scripts / configs may have changed)
+      #   2. Re-run post-build.sh  — injects fresh Docker image tarballs
+      #   3. Rebuild rootfs.ext2   — using mkfs.ext4 from the cached host toolchain
+      #   4. Re-run post-image.sh  — copies grub.cfg, runs genimage, builds VMDK+OVA
+      - name: "Cache HIT: fast path (re-run post-scripts only)"
+        if: steps.cache-br-output.outputs.cache-hit == 'true'
         run: |
+          echo "Cache HIT — skipping full Buildroot build (~90 min saved)"
+
+          echo ""
+          echo "==> Re-applying rootfs overlay..."
+          rsync -a --delete \
+            "${GITHUB_WORKSPACE}/buildroot/external/rootfs_overlay/" \
+            "${GITHUB_WORKSPACE}/output/target/"
+
+          echo ""
+          echo "==> Re-running post-build.sh..."
+          export TARGET_DIR="${GITHUB_WORKSPACE}/output/target"
+          export BINARIES_DIR="${GITHUB_WORKSPACE}/output/images"
+          export BUILD_DIR="${GITHUB_WORKSPACE}/output/build"
+          export BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH="${GITHUB_WORKSPACE}/buildroot/external"
+          bash buildroot/external/board/asbuiltreport-manager/post-build.sh
+
+          echo ""
+          echo "==> Rebuilding rootfs.ext2 from cached target tree..."
+          mkdir -p output/images
+          rm -f output/images/rootfs.ext2 output/images/rootfs.ext4
+          output/host/sbin/mkfs.ext4 \
+            -d output/target \
+            -r 1 -N 0 -m 5 \
+            -L "rootfs" -I 256 -O ^64bit \
+            output/images/rootfs.ext2 "38G"
+          ln -sf rootfs.ext2 output/images/rootfs.ext4
+          echo "rootfs.ext2: $(du -sh output/images/rootfs.ext2 | cut -f1)"
+
+          echo ""
+          echo "==> Re-running post-image.sh..."
+          bash buildroot/external/board/asbuiltreport-manager/post-image.sh
+        env:
+          COMPOSE_VERSION: ${{ env.COMPOSE_VERSION }}
+
+      # -- CACHE MISS: full Buildroot build (~90 min) ---------------------------
+      - name: "Cache MISS: full build (toolchain + packages + OVA)"
+        if: steps.cache-br-output.outputs.cache-hit != 'true'
+        run: |
+          echo "Cache MISS — running full Buildroot build..."
           make -C "buildroot-${BUILDROOT_VERSION}" \
             BR2_EXTERNAL="${GITHUB_WORKSPACE}/buildroot/external" \
             O="${GITHUB_WORKSPACE}/output" \
@@ -382,7 +445,24 @@ jobs:
           DOCKER_VERSION:  ${{ env.DOCKER_VERSION }}
           COMPOSE_VERSION: ${{ env.COMPOSE_VERSION }}
 
-      # ── Verify OVA ───────────────────────────────────────────────────────────
+      # Save the output cache after a successful full build only.
+      # Using actions/cache/save (not the restore step's implicit save) so that
+      # a failed build never overwrites a known-good cached tree.
+      - name: Save Buildroot output cache
+        if: steps.cache-br-output.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            output/build
+            output/host
+            output/staging
+            output/target
+            output/per-package
+            output/.config
+            output/Makefile
+          key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment') }}
+
+      # -- Verify OVA -----------------------------------------------------------
       - name: Verify OVA output
         run: |
           echo "── Output directory ───────────────────────────────────────────"
