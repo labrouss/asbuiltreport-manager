@@ -130,9 +130,6 @@ RAW_SIZE_BYTES=$(stat -c %s "${RAW_IMG}")
 log "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)  (${RAW_SIZE_BYTES} bytes)"
 
 # ── Step 4: Convert to streamOptimized VMDK ───────────────────────────────────
-# streamOptimized is what vCenter's OVA transfer agent expects for import.
-# san-manager uses this format — it is the correct format for OVA packaging.
-# (monolithicSparse is for direct datastore attachment, not OVA transfer.)
 VMDK="${BINARIES_DIR}/${APPLIANCE_NAME}-disk1.vmdk"
 log "Converting raw → streamOptimized VMDK..."
 qemu-img convert \
@@ -146,12 +143,16 @@ qemu-img convert \
 VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
 [ "${VMDK_SIZE_BYTES}" -gt 0 ] || die "VMDK is empty"
 
-# Virtual size = raw image size (what vCenter provisions on the datastore)
-DISK_SIZE_BYTES=${RAW_SIZE_BYTES}
-DISK_SIZE_GIB=$(( DISK_SIZE_BYTES / 1073741824 ))
+# The raw image is ~6.5 GB (6 GB rootfs + 512 MB EFI).
+# The OVF must declare the VIRTUAL size as 40 GB — this is what vCenter
+# provisions on the datastore as a thin disk. The VM's resize2fs script
+# expands the ext4 filesystem into the remaining space on first boot.
+# We override the capacity to 40 GiB rather than using the raw image size.
+DISK_SIZE_GIB=40
+DISK_SIZE_BYTES=$(( DISK_SIZE_GIB * 1024 * 1024 * 1024 ))
 DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
 VMDK_BASENAME=$(basename "${VMDK}")
-log "VMDK: virtual=${DISK_SIZE_GIB} GiB  file=${VMDK_SIZE_BYTES} bytes"
+log "VMDK: virtual=${DISK_SIZE_GIB} GiB (declared to vCenter)  file=${VMDK_SIZE_BYTES} bytes (actual)"
 
 # ── Step 5: OVF descriptor ─────────────────────────────────────────────────────
 OVF_TEMPLATE="${EXTERNAL}/board/asbuiltreport-manager/asbuiltreport-manager.ovf.template"

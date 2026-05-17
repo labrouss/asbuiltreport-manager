@@ -1,0 +1,51 @@
+#!/bin/sh
+# /etc/init.d/S01resize — Expand rootfs to fill the full partition on first boot
+#
+# The OVA ships with a 6 GB rootfs image. vCenter provisions the VMDK at the
+# full declared virtual size (40 GB). This script runs once to expand the
+# ext4 filesystem to fill whatever space the partition actually has.
+#
+# Sequence: rcS remounts rw → S01resize → S05ovf-init → ... → S30docker
+
+SENTINEL="/var/lib/asbuiltreport/.resize-done"
+
+case "$1" in
+  start)
+    if [ -f "$SENTINEL" ]; then
+      exit 0   # Already done
+    fi
+
+    ROOT_DEV=$(findmnt -n -o SOURCE /)
+    ROOT_DEV="${ROOT_DEV:-/dev/sda2}"
+
+    # Get current filesystem size and partition size
+    FS_BLOCKS=$(tune2fs -l "$ROOT_DEV" 2>/dev/null | awk '/Block count:/{print $3}')
+    PART_SECTORS=$(cat /sys/class/block/$(basename $ROOT_DEV)/size 2>/dev/null || echo 0)
+    PART_BLOCKS=$(( PART_SECTORS / 8 ))   # 512-byte sectors → 4K blocks
+
+    if [ -z "$FS_BLOCKS" ] || [ "$PART_BLOCKS" -le "$FS_BLOCKS" ]; then
+      # Already full size or can't determine
+      mkdir -p "$(dirname $SENTINEL)" && touch "$SENTINEL"
+      exit 0
+    fi
+
+    echo "Expanding root filesystem to fill partition..."
+    echo "  Device:   $ROOT_DEV"
+    echo "  Current:  ${FS_BLOCKS} blocks"
+    echo "  Target:   ${PART_BLOCKS} blocks"
+
+    # resize2fs with no size argument fills the partition
+    if resize2fs "$ROOT_DEV"; then
+      echo "Filesystem expanded successfully."
+    else
+      echo "WARNING: resize2fs failed — continuing with current size" >&2
+    fi
+
+    mkdir -p "$(dirname $SENTINEL)"
+    touch "$SENTINEL"
+    ;;
+  stop|restart) ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+esac
