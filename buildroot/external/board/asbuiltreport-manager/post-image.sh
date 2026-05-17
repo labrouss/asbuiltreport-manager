@@ -2,91 +2,136 @@
 # =============================================================================
 # post-image.sh — AsBuiltReport Manager OVA
 #
-# Steps:
-#   0. Install grub.cfg into efi-part/
-#   1. genimage   → raw GPT disk image (.img)
-#   2. qemu-img   → monolithic flat VMDK  (NOT stream-optimised)
-#   3. Render OVF → .ovf  (disk sizes taken from the flat VMDK)
-#   4. SHA256 manifest → .mf
-#   5. tar(ovf + mf + vmdk) → .ova
+# Mirrors san-manager/post-image.sh exactly. Three tasks:
 #
-# VMDK format choice — ESXi compatibility matrix:
-#   streamOptimized  → transport-only; ESXi cannot attach/clone directly.
-#                      Requires ovftool to convert after import. AVOID.
-#   monolithicFlat   → single flat .vmdk + descriptor file; ESXi attaches
-#                      natively but OVA packaging requires both files. AVOID.
-#   monolithicSparse → single self-contained .vmdk; ESXi attaches natively,
-#                      ovftool-compatible, accepted by vCenter OVF import. USE.
+#  1. Build bootx64.efi using grub-mkstandalone with all required modules
+#     baked in from Buildroot's own grub2 build output. This is necessary
+#     because Buildroot's default bootx64.efi (~608 KB) is built with
+#     BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI which does NOT include the
+#     'linux' command — so it cannot load a kernel. grub-mkstandalone
+#     produces a fully self-contained binary (several MB) that includes
+#     every module needed to boot.
 #
-# We use monolithicSparse (subformat=monolithicSparse in qemu-img).
-# vCenter accepts this for OVF import and ESXi can attach/clone it directly.
+#  2. Inject bzImage into rootfs.ext4 at /boot/bzImage using debugfs.
+#     GRUB reads the kernel from the root filesystem, not the EFI partition.
+#
+#  3. Run genimage to assemble the final disk image.
+#
+#  4. Convert disk.img → monolithicSparse VMDK → OVA.
+#
+# Buildroot exports: BINARIES_DIR, TARGET_DIR, BUILD_DIR
 # =============================================================================
 set -euo pipefail
 
-BINARIES_DIR="${BINARIES_DIR:?}"
-BUILD_DIR="${BUILD_DIR:?}"
+: "${BINARIES_DIR:?BINARIES_DIR not set}"
+: "${TARGET_DIR:?TARGET_DIR not set}"
+: "${BUILD_DIR:?BUILD_DIR not set}"
+
 EXTERNAL="${BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH:?}"
+SCRIPT_DIR="${EXTERNAL}/board/asbuiltreport-manager"
+GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 
 APPLIANCE_NAME="asbuiltreport-manager"
 VERSION="1.0.0"
-OVA_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}-v${VERSION}.ova"
-GENIMAGE_CFG="${EXTERNAL}/board/asbuiltreport-manager/genimage.cfg"
-OVF_TEMPLATE="${EXTERNAL}/board/asbuiltreport-manager/asbuiltreport-manager.ovf.template"
 
-info()  { echo "[post-image] INFO:  $*"; }
-warn()  { echo "[post-image] WARN:  $*" >&2; }
-error() { echo "[post-image] ERROR: $*" >&2; exit 1; }
+log() { echo "[post-image] INFO:  $*"; }
+warn() { echo "[post-image] WARN:  $*" >&2; }
+die() { echo "[post-image] ERROR: $*" >&2; exit 1; }
 
-GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
-rm -rf "${GENIMAGE_TMP}"
+log "=== BINARIES_DIR contents ==="
+find "${BINARIES_DIR}" -maxdepth 2 | sort
+log "==="
 
-# =============================================================================
-# 0. Install our grub.cfg into the efi-part/ directory
-# =============================================================================
+# ── Prerequisites ─────────────────────────────────────────────────────────────
+[ -f "${BINARIES_DIR}/rootfs.ext2" ] || die "rootfs.ext2 missing from ${BINARIES_DIR}"
+[ -f "${BINARIES_DIR}/bzImage" ]     || die "bzImage missing from ${BINARIES_DIR}"
+
+# rootfs.ext4 is a symlink → rootfs.ext2 created by Buildroot; ensure it exists
+[ -f "${BINARIES_DIR}/rootfs.ext4" ] || \
+    ln -sf rootfs.ext2 "${BINARIES_DIR}/rootfs.ext4"
+
+# ── Step 1: Build bootx64.efi with grub-mkstandalone ──────────────────────────
+# Find Buildroot's grub2 build directory and module output
+GRUB_BUILD_DIR=$(find "${BUILD_DIR}" -maxdepth 1 -name "grub2-*" -type d | head -1)
+[ -n "${GRUB_BUILD_DIR}" ] || die "grub2 build dir not found in ${BUILD_DIR}"
+
+GRUB_MODDIR="${GRUB_BUILD_DIR}/build-x86_64-efi/grub-core"
+[ -d "${GRUB_MODDIR}" ] || die "GRUB2 module dir not found: ${GRUB_MODDIR}"
+
+GRUB_MKSTANDALONE="${BUILD_DIR}/../host/bin/grub-mkstandalone"
+[ -f "${GRUB_MKSTANDALONE}" ] || die "grub-mkstandalone not found at ${GRUB_MKSTANDALONE}"
+
+GRUB_CFG_SRC="${SCRIPT_DIR}/grub.cfg"
+[ -f "${GRUB_CFG_SRC}" ] || die "grub.cfg not found at ${GRUB_CFG_SRC}"
+
 EFI_BOOT_DIR="${BINARIES_DIR}/efi-part/EFI/BOOT"
-GRUB_CFG_SRC="${EXTERNAL}/board/asbuiltreport-manager/grub.cfg"
+mkdir -p "${EFI_BOOT_DIR}"
 
-[[ -d "${EFI_BOOT_DIR}" ]] \
-    || error "GRUB2 EFI output dir not found: ${EFI_BOOT_DIR}"
+log "Building bootx64.efi with grub-mkstandalone..."
+log "  Module dir: ${GRUB_MODDIR}"
+log "  grub.cfg:   ${GRUB_CFG_SRC}"
 
-if [[ -f "${GRUB_CFG_SRC}" ]]; then
-    cp "${GRUB_CFG_SRC}" "${EFI_BOOT_DIR}/grub.cfg"
-    info "grub.cfg installed → ${EFI_BOOT_DIR}/grub.cfg"
+"${GRUB_MKSTANDALONE}" \
+    --format=x86_64-efi \
+    --directory="${GRUB_MODDIR}" \
+    --modules="boot linux part_gpt part_msdos fat ext2 normal echo configfile \
+               search search_fs_uuid search_fs_file search_label ls cat \
+               reboot halt gfxterm font video all_video serial" \
+    --output="${EFI_BOOT_DIR}/bootx64.efi" \
+    "boot/grub/grub.cfg=${GRUB_CFG_SRC}"
+
+EFI_SIZE=$(stat -c '%s' "${EFI_BOOT_DIR}/bootx64.efi")
+log "bootx64.efi: $(numfmt --to=iec "${EFI_SIZE}") — should be several MB, not ~608KB"
+
+# Verify the linux command is present in the binary
+if strings "${EFI_BOOT_DIR}/bootx64.efi" | grep -q "^linux$"; then
+    log "✓ 'linux' command confirmed in bootx64.efi"
 else
-    warn "No custom grub.cfg — using Buildroot default."
+    warn "'linux' command not found in bootx64.efi strings — boot may fail"
 fi
-ls -lh "${EFI_BOOT_DIR}/"
 
-# =============================================================================
-# 1. genimage → raw GPT disk image
-# =============================================================================
-info "Running genimage..."
+# ── Step 2: Inject bzImage into rootfs.ext4 at /boot/bzImage ──────────────────
+# GRUB loads the kernel from the root filesystem, not the EFI partition.
+# debugfs writes directly into the ext4 image without mounting it.
+log "Injecting bzImage into rootfs.ext4 at /boot/bzImage..."
+
+if debugfs -R "stat /boot/bzImage" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null \
+        | grep -q "Type: regular"; then
+    log "bzImage already present in rootfs.ext4 — overwriting..."
+fi
+
+debugfs -w -R "mkdir /boot" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+debugfs -w -R "write ${BINARIES_DIR}/bzImage /boot/bzImage" \
+    "${BINARIES_DIR}/rootfs.ext4"
+log "bzImage injected ($(du -sh "${BINARIES_DIR}/bzImage" | cut -f1))"
+
+# Verify injection
+if debugfs -R "stat /boot/bzImage" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null \
+        | grep -q "Type: regular"; then
+    log "✓ /boot/bzImage verified in rootfs.ext4"
+else
+    die "/boot/bzImage injection failed — kernel will not be found at boot"
+fi
+
+# ── Step 3: genimage → raw disk image ─────────────────────────────────────────
+rm -rf "${GENIMAGE_TMP}"
+log "Running genimage..."
 genimage \
-    --rootpath   "${TARGET_DIR:-${BINARIES_DIR}/../target}" \
+    --config     "${SCRIPT_DIR}/genimage.cfg" \
+    --rootpath   "${TARGET_DIR}" \
     --tmppath    "${GENIMAGE_TMP}" \
     --inputpath  "${BINARIES_DIR}" \
-    --outputpath "${BINARIES_DIR}" \
-    --config     "${GENIMAGE_CFG}"
+    --outputpath "${BINARIES_DIR}"
 
 RAW_IMG="${BINARIES_DIR}/${APPLIANCE_NAME}.img"
-[[ -f "${RAW_IMG}" ]] || error "genimage did not produce ${RAW_IMG}"
-RAW_SIZE_BYTES=$(stat -c %s "${RAW_IMG}")
-info "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)  (${RAW_SIZE_BYTES} bytes)"
+[ -f "${RAW_IMG}" ] || die "genimage did not produce ${APPLIANCE_NAME}.img"
 
-# =============================================================================
-# 2. qemu-img → monolithicSparse VMDK
-#
-# monolithicSparse is a single self-contained VMDK file that:
-#   - vCenter accepts for OVF/OVA import  (unlike streamOptimized which
-#     vCenter's transfer layer often rejects for large disks)
-#   - ESXi can attach and clone directly  (unlike streamOptimized)
-#   - Is sparse so only allocated blocks occupy space on the datastore
-#
-# adapter_type=lsilogic matches the SCSI controller declared in the OVF.
-# hwversion=8 is the minimum that vSphere 6.x/7.x/8.x all accept.
-# =============================================================================
+RAW_SIZE_BYTES=$(stat -c %s "${RAW_IMG}")
+log "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)  (${RAW_SIZE_BYTES} bytes)"
+
+# ── Step 4: Convert to monolithicSparse VMDK ───────────────────────────────────
 VMDK="${BINARIES_DIR}/${APPLIANCE_NAME}-disk1.vmdk"
-info "Converting raw → monolithicSparse VMDK..."
+log "Converting raw → monolithicSparse VMDK..."
 qemu-img convert \
     -f raw \
     -O vmdk \
@@ -94,25 +139,20 @@ qemu-img convert \
     "${RAW_IMG}" \
     "${VMDK}"
 
-# Verify the VMDK was written completely
-[[ -f "${VMDK}" ]] || error "qemu-img did not produce ${VMDK}"
-
+[ -f "${VMDK}" ] || die "qemu-img did not produce VMDK"
 VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
-[[ "${VMDK_SIZE_BYTES}" -gt 0 ]] || error "VMDK is empty — conversion failed"
+[ "${VMDK_SIZE_BYTES}" -gt 0 ] || die "VMDK is empty"
 
-# Read virtual size from the raw image (not the VMDK — avoids sparse confusion)
 DISK_SIZE_BYTES=${RAW_SIZE_BYTES}
 DISK_SIZE_GIB=$(( DISK_SIZE_BYTES / 1073741824 ))
 DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
 VMDK_BASENAME=$(basename "${VMDK}")
+log "VMDK: virtual=${DISK_SIZE_GIB} GiB  sectors=${DISK_CAPACITY_SECTORS}  file=${VMDK_SIZE_BYTES} bytes"
 
-info "VMDK: virtual=${DISK_SIZE_GIB} GiB  sectors=${DISK_CAPACITY_SECTORS}  file=${VMDK_SIZE_BYTES} bytes"
-
-# =============================================================================
-# 3. OVF descriptor
-# =============================================================================
+# ── Step 5: OVF descriptor ─────────────────────────────────────────────────────
+OVF_TEMPLATE="${EXTERNAL}/board/asbuiltreport-manager/asbuiltreport-manager.ovf.template"
 OVF_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}.ovf"
-info "Rendering OVF descriptor..."
+log "Rendering OVF descriptor..."
 sed \
     -e "s|@@APPLIANCE_NAME@@|${APPLIANCE_NAME}|g" \
     -e "s|@@VERSION@@|${VERSION}|g" \
@@ -122,9 +162,7 @@ sed \
     -e "s|@@DISK_SIZE_GIB@@|${DISK_SIZE_GIB}|g" \
     "${OVF_TEMPLATE}" > "${OVF_OUT}"
 
-# =============================================================================
-# 4. Manifest
-# =============================================================================
+# ── Step 6: Manifest ──────────────────────────────────────────────────────────
 MF_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}.mf"
 OVF_SHA256=$(sha256sum "${OVF_OUT}" | awk '{print $1}')
 VMDK_SHA256=$(sha256sum "${VMDK}"   | awk '{print $1}')
@@ -133,38 +171,29 @@ VMDK_SHA256=$(sha256sum "${VMDK}"   | awk '{print $1}')
     echo "SHA256(${VMDK_BASENAME})= ${VMDK_SHA256}"
 } > "${MF_OUT}"
 
-# =============================================================================
-# 5. Package OVA
-#
-# OVF spec (DSP0243): the OVF descriptor file MUST be the first file in the
-# tar archive. Use --format=ustar (POSIX tar, no GNU extensions) for maximum
-# compatibility with vCenter's OVA parser.
-# =============================================================================
-info "Packaging OVA: ${OVA_OUT}"
+# ── Step 7: Package OVA ───────────────────────────────────────────────────────
+OVA_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}-v${VERSION}.ova"
+log "Packaging OVA: ${OVA_OUT}"
 rm -f "${OVA_OUT}"
 cd "${BINARIES_DIR}"
-tar \
-    --format=ustar \
-    -cf "${OVA_OUT}" \
+tar --format=ustar -cf "${OVA_OUT}" \
     "${APPLIANCE_NAME}.ovf" \
     "${APPLIANCE_NAME}.mf" \
     "${VMDK_BASENAME}"
 
-# Verify the OVA tar is not empty and the VMDK is inside
 OVA_SIZE_BYTES=$(stat -c %s "${OVA_OUT}")
-[[ "${OVA_SIZE_BYTES}" -gt "${VMDK_SIZE_BYTES}" ]] \
-    || error "OVA (${OVA_SIZE_BYTES} bytes) is smaller than the VMDK (${VMDK_SIZE_BYTES} bytes) — packaging failed."
-
-info "OVA contents:"
-tar -tvf "${OVA_OUT}"
+[ "${OVA_SIZE_BYTES}" -gt "${VMDK_SIZE_BYTES}" ] \
+    || die "OVA smaller than VMDK — packaging failed"
 
 OVA_SHA256=$(sha256sum "${OVA_OUT}" | awk '{print $1}')
-OVA_SIZE=$(du -sh "${OVA_OUT}" | cut -f1)
 echo "${OVA_SHA256}  ${APPLIANCE_NAME}-v${VERSION}.ova" \
     > "${BINARIES_DIR}/${APPLIANCE_NAME}-v${VERSION}.ova.sha256"
 
-info "────────────────────────────────────────────────────────────"
-info " OVA:    ${OVA_OUT}"
-info " Size:   ${OVA_SIZE}"
-info " SHA256: ${OVA_SHA256}"
-info "────────────────────────────────────────────────────────────"
+log "OVA contents:"
+tar -tvf "${OVA_OUT}"
+
+log "────────────────────────────────────────────────────────────"
+log " OVA:    ${OVA_OUT}"
+log " Size:   $(du -sh "${OVA_OUT}" | cut -f1)"
+log " SHA256: ${OVA_SHA256}"
+log "────────────────────────────────────────────────────────────"

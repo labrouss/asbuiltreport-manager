@@ -372,7 +372,6 @@ jobs:
             output/staging
             output/target
             output/per-package
-            output/images/efi-part
             output/.config
             output/Makefile
           key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment') }}
@@ -433,14 +432,9 @@ jobs:
           echo "rootfs.ext2: $(du -sh output/images/rootfs.ext2 | cut -f1)"
 
           echo ""
-          echo "==> Re-running post-image.sh..."
-          # Guard: efi-part must exist (it's in the cache, but verify)
-          EFI_DIR="${GITHUB_WORKSPACE}/output/images/efi-part/EFI/BOOT"
-          if [[ ! -d "${EFI_DIR}" ]]; then
-            echo "ERROR: efi-part not found in cache — this should not happen."
-            echo "Delete the br-output-* cache entry and re-run to trigger a full build."
-            exit 1
-          fi
+          echo "==> Re-running post-image.sh (grub-mkstandalone + bzImage inject + OVA)..."
+          # post-image.sh uses grub-mkstandalone from the cached host toolchain
+          # and debugfs to inject bzImage — efi-part/ is rebuilt from scratch
           bash buildroot/external/board/asbuiltreport-manager/post-image.sh
         env:
           COMPOSE_VERSION: ${{ env.COMPOSE_VERSION }}
@@ -472,7 +466,6 @@ jobs:
             output/staging
             output/target
             output/per-package
-            output/images/efi-part
             output/.config
             output/Makefile
           key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment') }}
