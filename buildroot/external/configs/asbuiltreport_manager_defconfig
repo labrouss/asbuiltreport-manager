@@ -2,6 +2,7 @@
 # buildroot/external/configs/asbuiltreport_manager_defconfig
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
+# Cache-bust: 2026-05-17-v4 (parted resize, chrony.conf, motd, profile.d)
 #
 # All symbols validated against the san-manager reference defconfig which
 # is confirmed working on Buildroot 2024.02.9.
@@ -53,7 +54,7 @@ BR2_TARGET_GRUB2_X86_64_EFI=y
 # ── Root filesystem ───────────────────────────────────────────────────────────
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-BR2_TARGET_ROOTFS_EXT2_SIZE="6G"
+BR2_TARGET_ROOTFS_EXT2_SIZE="8G"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/rootfs_overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/board/asbuiltreport-manager/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/board/asbuiltreport-manager/post-image.sh"

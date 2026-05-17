@@ -1,44 +1,58 @@
 #!/bin/sh
-# /etc/init.d/S01resize — Expand rootfs to fill the full partition on first boot
+# /etc/init.d/S01resize — Expand rootfs partition + filesystem on first boot
 #
-# The OVA ships with a 6 GB rootfs image. vCenter provisions the VMDK at the
-# full declared virtual size (40 GB). This script runs once to expand the
-# ext4 filesystem to fill whatever space the partition actually has.
+# The OVA ships with a 6 GB rootfs. vCenter provisions the VMDK at 40 GB.
+# Steps:
+#   1. Use parted to resize the rootfs partition to fill the disk
+#   2. Use resize2fs to expand the ext4 filesystem into the new space
 #
-# Sequence: rcS remounts rw → S01resize → S05ovf-init → ... → S30docker
+# This runs as the FIRST init script (S01) so disk space is available for all
+# subsequent scripts including Docker image loading (S40).
 
 SENTINEL="/var/lib/asbuiltreport/.resize-done"
 
 case "$1" in
   start)
     if [ -f "$SENTINEL" ]; then
-      exit 0   # Already done
-    fi
-
-    ROOT_DEV=$(findmnt -n -o SOURCE /)
-    ROOT_DEV="${ROOT_DEV:-/dev/sda2}"
-
-    # Get current filesystem size and partition size
-    FS_BLOCKS=$(tune2fs -l "$ROOT_DEV" 2>/dev/null | awk '/Block count:/{print $3}')
-    PART_SECTORS=$(cat /sys/class/block/$(basename $ROOT_DEV)/size 2>/dev/null || echo 0)
-    PART_BLOCKS=$(( PART_SECTORS / 8 ))   # 512-byte sectors → 4K blocks
-
-    if [ -z "$FS_BLOCKS" ] || [ "$PART_BLOCKS" -le "$FS_BLOCKS" ]; then
-      # Already full size or can't determine
-      mkdir -p "$(dirname $SENTINEL)" && touch "$SENTINEL"
       exit 0
     fi
 
-    echo "Expanding root filesystem to fill partition..."
-    echo "  Device:   $ROOT_DEV"
-    echo "  Current:  ${FS_BLOCKS} blocks"
-    echo "  Target:   ${PART_BLOCKS} blocks"
+    # Find root device and disk
+    ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null || echo "/dev/sda2")
+    DISK=$(echo "$ROOT_DEV" | sed 's/[0-9]*$//')    # /dev/sda2 → /dev/sda
+    PART_NUM=$(echo "$ROOT_DEV" | grep -oE '[0-9]+$') # /dev/sda2 → 2
 
-    # resize2fs with no size argument fills the partition
-    if resize2fs "$ROOT_DEV"; then
-      echo "Filesystem expanded successfully."
+    DISK_SECTORS=$(cat /sys/class/block/$(basename $DISK)/size 2>/dev/null || echo 0)
+    PART_SECTORS=$(cat /sys/class/block/$(basename $ROOT_DEV)/size 2>/dev/null || echo 0)
+
+    echo "Checking disk expansion:"
+    echo "  Disk:      $DISK  ($DISK_SECTORS sectors)"
+    echo "  Partition: $ROOT_DEV  ($PART_SECTORS sectors)"
+
+    # If disk is significantly larger than partition, expand
+    if [ "$DISK_SECTORS" -gt $(( PART_SECTORS + 1024 )) ]; then
+      echo "  → Expanding partition $PART_NUM to fill disk..."
+
+      # Resize the partition using parted
+      # 'resizepart' requires the partition number and new end
+      parted -s "$DISK" resizepart "$PART_NUM" "100%" 2>/dev/null || \
+        parted -s "$DISK" resizepart "$PART_NUM" -- "-1s" 2>/dev/null || true
+
+      # Inform kernel of the new partition size
+      partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" 2>/dev/null || true
+
+      # Small delay for kernel to re-read partition table
+      sleep 1
+
+      # Now expand the filesystem to fill the new partition size
+      echo "  → Expanding filesystem..."
+      if resize2fs "$ROOT_DEV"; then
+        echo "  → Done. New size: $(df -h / | awk 'NR==2{print $2}')"
+      else
+        echo "  → WARNING: resize2fs failed" >&2
+      fi
     else
-      echo "WARNING: resize2fs failed — continuing with current size" >&2
+      echo "  → Already at full size, skipping."
     fi
 
     mkdir -p "$(dirname $SENTINEL)"
