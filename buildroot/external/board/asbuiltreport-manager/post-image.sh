@@ -129,13 +129,16 @@ RAW_IMG="${BINARIES_DIR}/${APPLIANCE_NAME}.img"
 RAW_SIZE_BYTES=$(stat -c %s "${RAW_IMG}")
 log "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)  (${RAW_SIZE_BYTES} bytes)"
 
-# ── Step 4: Convert to monolithicSparse VMDK ───────────────────────────────────
+# ── Step 4: Convert to streamOptimized VMDK ───────────────────────────────────
+# streamOptimized is what vCenter's OVA transfer agent expects for import.
+# san-manager uses this format — it is the correct format for OVA packaging.
+# (monolithicSparse is for direct datastore attachment, not OVA transfer.)
 VMDK="${BINARIES_DIR}/${APPLIANCE_NAME}-disk1.vmdk"
-log "Converting raw → monolithicSparse VMDK..."
+log "Converting raw → streamOptimized VMDK..."
 qemu-img convert \
     -f raw \
     -O vmdk \
-    -o subformat=monolithicSparse,adapter_type=lsilogic,hwversion=17 \
+    -o subformat=streamOptimized \
     "${RAW_IMG}" \
     "${VMDK}"
 
@@ -143,11 +146,12 @@ qemu-img convert \
 VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
 [ "${VMDK_SIZE_BYTES}" -gt 0 ] || die "VMDK is empty"
 
+# Virtual size = raw image size (what vCenter provisions on the datastore)
 DISK_SIZE_BYTES=${RAW_SIZE_BYTES}
 DISK_SIZE_GIB=$(( DISK_SIZE_BYTES / 1073741824 ))
 DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
 VMDK_BASENAME=$(basename "${VMDK}")
-log "VMDK: virtual=${DISK_SIZE_GIB} GiB  sectors=${DISK_CAPACITY_SECTORS}  file=${VMDK_SIZE_BYTES} bytes"
+log "VMDK: virtual=${DISK_SIZE_GIB} GiB  file=${VMDK_SIZE_BYTES} bytes"
 
 # ── Step 5: OVF descriptor ─────────────────────────────────────────────────────
 OVF_TEMPLATE="${EXTERNAL}/board/asbuiltreport-manager/asbuiltreport-manager.ovf.template"
@@ -157,8 +161,9 @@ sed \
     -e "s|@@APPLIANCE_NAME@@|${APPLIANCE_NAME}|g" \
     -e "s|@@VERSION@@|${VERSION}|g" \
     -e "s|@@VMDK_FILENAME@@|${VMDK_BASENAME}|g" \
-    -e "s|@@DISK_CAPACITY_SECTORS@@|${DISK_CAPACITY_SECTORS}|g" \
+    -e "s|@@DISK_SIZE_BYTES@@|${DISK_SIZE_BYTES}|g" \
     -e "s|@@VMDK_SIZE_BYTES@@|${VMDK_SIZE_BYTES}|g" \
+    -e "s|@@DISK_CAPACITY_SECTORS@@|${DISK_CAPACITY_SECTORS}|g" \
     -e "s|@@DISK_SIZE_GIB@@|${DISK_SIZE_GIB}|g" \
     "${OVF_TEMPLATE}" > "${OVF_OUT}"
 
@@ -176,7 +181,13 @@ OVA_OUT="${BINARIES_DIR}/${APPLIANCE_NAME}-v${VERSION}.ova"
 log "Packaging OVA: ${OVA_OUT}"
 rm -f "${OVA_OUT}"
 cd "${BINARIES_DIR}"
-tar --format=ustar -cf "${OVA_OUT}" \
+# CRITICAL: --format=ustar prevents GNU tar extensions that break VMware's parser.
+# --numeric-owner --owner=0 --group=0 prevents UID/GID strings confusing vCenter.
+# Member order: ovf → mf → vmdk (OVF spec requires descriptor first).
+tar --format=ustar \
+    --numeric-owner \
+    --owner=0 --group=0 \
+    -cf "${OVA_OUT}" \
     "${APPLIANCE_NAME}.ovf" \
     "${APPLIANCE_NAME}.mf" \
     "${VMDK_BASENAME}"

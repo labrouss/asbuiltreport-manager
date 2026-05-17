@@ -1,157 +1,114 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  AsBuiltReport Manager — OVF Descriptor Template
-  Processed by post-image.sh; tokens replaced with @@TOKEN@@ syntax.
+<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
+          xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
+          xmlns:vmw="http://www.vmware.com/schema/ovf"
+          xml:lang="en-US">
 
-  VM Specification:
-    CPU:  4 vCPU
-    RAM:  8 GB
-    Disk: 40 GB (SCSI LSI Logic, thin-provisioned VMDK)
-    NIC:  VMXNET3 (E1000 fallback)
-
-  OVF Properties (configurable at deploy-time in vCenter):
-    guestinfo.hostname   — VM hostname
-    guestinfo.ipaddress  — Static IP (CIDR notation, e.g. 192.168.1.50/24)
-                           Leave blank to use DHCP
-    guestinfo.gateway    — Default gateway IP
-    guestinfo.dns        — DNS server(s), space-separated
-    guestinfo.password   — Initial root/admin password (SHA-512 hashed at runtime)
--->
-<Envelope
-    xmlns="http://schemas.dmtf.org/ovf/envelope/1"
-    xmlns:cim="http://schemas.dmtf.org/wbem/wscim/1/common"
-    xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
-    xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
-    xmlns:vmw="http://www.vmware.com/schema/ovf"
-    xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://schemas.dmtf.org/ovf/envelope/1 http://schemas.dmtf.org/ovf/envelope/1/dsp8023_1.1.0.xsd">
-
-  <!-- ── References ── -->
   <References>
-    <File
-        ovf:id="disk1"
-        ovf:href="@@VMDK_FILENAME@@"
-        ovf:size="@@VMDK_SIZE_BYTES@@"/>
+    <File ovf:id="disk1" ovf:href="@@VMDK_FILENAME@@" ovf:size="@@VMDK_SIZE_BYTES@@"/>
   </References>
 
-  <!-- ── Disk Section ── -->
   <DiskSection>
     <Info>Virtual disk information</Info>
-    <Disk
-        ovf:diskId="vmdisk1"
-        ovf:fileRef="disk1"
-        ovf:capacity="@@DISK_CAPACITY_SECTORS@@"
-        ovf:capacityAllocationUnits="byte * 512"
-        ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#sparse"/>
+    <Disk ovf:diskId="vmdisk1"
+          ovf:fileRef="disk1"
+          ovf:capacity="@@DISK_SIZE_BYTES@@"
+          ovf:capacityAllocationUnits="byte"
+          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
+          ovf:populatedSize="@@VMDK_SIZE_BYTES@@"/>
   </DiskSection>
 
-  <!-- ── Network Section ── -->
   <NetworkSection>
-    <Info>VM network adapters</Info>
+    <Info>Logical networks used in the package</Info>
     <Network ovf:name="VM Network">
-      <Description>The network that this VM will be connected to</Description>
+      <Description>Management network for the AsBuiltReport Manager appliance</Description>
     </Network>
   </NetworkSection>
 
-  <!-- ── Virtual System ── -->
-  <VirtualSystem ovf:id="@@APPLIANCE_NAME@@">
-    <Info>AsBuiltReport Manager v@@VERSION@@ — VMware OVA Appliance</Info>
-    <Name>@@APPLIANCE_NAME@@</Name>
+  <VirtualSystem ovf:id="asbuiltreport-manager">
+    <Info>AsBuiltReport Manager Appliance v@@VERSION@@</Info>
 
-    <!-- ── Operating System ── -->
+    <AnnotationSection>
+      <Info>Appliance annotations</Info>
+      <Annotation>AsBuiltReport Manager v@@VERSION@@ — Web UI: http://vm-ip:3001</Annotation>
+    </AnnotationSection>
+
     <OperatingSystemSection ovf:id="101" vmw:osType="otherLinux64Guest">
-      <Info>Guest OS</Info>
-      <Description>Linux (64-bit)</Description>
+      <Info>Guest operating system</Info>
+      <Description>Linux (Buildroot, musl, kernel 6.6 LTS)</Description>
     </OperatingSystemSection>
 
-    <!-- ── Virtual Hardware ── -->
     <VirtualHardwareSection>
-      <Info>4 vCPU, 8 GB RAM, 40 GB disk</Info>
+      <Info>Virtual hardware requirements</Info>
 
-      <System>
+      <ovf:System>
         <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
         <vssd:InstanceID>0</vssd:InstanceID>
+        <vssd:VirtualSystemIdentifier>asbuiltreport-manager</vssd:VirtualSystemIdentifier>
         <vssd:VirtualSystemType>vmx-17</vssd:VirtualSystemType>
-      </System>
+      </ovf:System>
 
-      <!-- CPU: 4 vCPU -->
-      <Item>
-        <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
+      <!-- 4 vCPU -->
+      <ovf:Item>
         <rasd:Description>Number of virtual CPUs</rasd:Description>
         <rasd:ElementName>4 virtual CPU(s)</rasd:ElementName>
         <rasd:InstanceID>1</rasd:InstanceID>
         <rasd:ResourceType>3</rasd:ResourceType>
         <rasd:VirtualQuantity>4</rasd:VirtualQuantity>
-      </Item>
+      </ovf:Item>
 
-      <!-- RAM: 8192 MB -->
-      <Item>
+      <!-- 8 GB RAM -->
+      <ovf:Item>
         <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
         <rasd:Description>Memory Size</rasd:Description>
         <rasd:ElementName>8192 MB of memory</rasd:ElementName>
         <rasd:InstanceID>2</rasd:InstanceID>
         <rasd:ResourceType>4</rasd:ResourceType>
         <rasd:VirtualQuantity>8192</rasd:VirtualQuantity>
-      </Item>
+      </ovf:Item>
 
-      <!-- SCSI Controller (LSI Logic) -->
-      <Item>
-        <rasd:Address>0</rasd:Address>
-        <rasd:Description>SCSI Controller</rasd:Description>
-        <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
+      <!-- SATA Controller (matches adapter_type=lsilogic in VMDK but vCenter
+           maps streamOptimized VMDKs to SATA for EFI VMs) -->
+      <ovf:Item>
+        <rasd:Description>SATA Controller</rasd:Description>
+        <rasd:ElementName>SATA controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
-        <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
-        <rasd:ResourceType>6</rasd:ResourceType>
-      </Item>
+        <rasd:ResourceSubType>vmware.sata.ahci</rasd:ResourceSubType>
+        <rasd:ResourceType>20</rasd:ResourceType>
+      </ovf:Item>
 
-      <!-- Disk drive -->
-      <Item>
+      <!-- Hard disk attached to SATA controller -->
+      <ovf:Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
-        <rasd:ElementName>Hard Disk 1</rasd:ElementName>
+        <rasd:Description>Disk image</rasd:Description>
+        <rasd:ElementName>Hard disk 1</rasd:ElementName>
         <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
         <rasd:InstanceID>4</rasd:InstanceID>
         <rasd:Parent>3</rasd:Parent>
         <rasd:ResourceType>17</rasd:ResourceType>
-      </Item>
+      </ovf:Item>
 
-      <!-- IDE Controller (CD-ROM) -->
-      <Item>
-        <rasd:Address>1</rasd:Address>
-        <rasd:Description>IDE Controller</rasd:Description>
-        <rasd:ElementName>IDE Controller 1</rasd:ElementName>
-        <rasd:InstanceID>5</rasd:InstanceID>
-        <rasd:ResourceType>5</rasd:ResourceType>
-      </Item>
-
-      <!-- CD-ROM -->
-      <Item ovf:required="false">
-        <rasd:AddressOnParent>0</rasd:AddressOnParent>
-        <rasd:AutomaticAllocation>false</rasd:AutomaticAllocation>
-        <rasd:ElementName>CD-ROM 1</rasd:ElementName>
-        <rasd:InstanceID>6</rasd:InstanceID>
-        <rasd:Parent>5</rasd:Parent>
-        <rasd:ResourceType>15</rasd:ResourceType>
-      </Item>
-
-      <!-- NIC: VMXNET3 -->
-      <Item>
+      <!-- VMXNET3 NIC -->
+      <ovf:Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
         <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
         <rasd:Connection>VM Network</rasd:Connection>
-        <rasd:Description>VMXNET3 Network Adapter</rasd:Description>
-        <rasd:ElementName>Network Adapter 1</rasd:ElementName>
-        <rasd:InstanceID>7</rasd:InstanceID>
+        <rasd:Description>VMXNET3 ethernet adapter</rasd:Description>
+        <rasd:ElementName>Network adapter 1</rasd:ElementName>
+        <rasd:InstanceID>5</rasd:InstanceID>
         <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
         <rasd:ResourceType>10</rasd:ResourceType>
-      </Item>
+      </ovf:Item>
 
-      <!-- VMware extras: enable VMX Guest Info / GuestOS -->
-      <vmw:ExtraConfig ovf:required="false" vmw:key="guestinfo.ovfenv" vmw:value=""/>
-      <vmw:ExtraConfig ovf:required="false" vmw:key="vmware.tools.internalversion" vmw:value="0"/>
+      <!-- EFI firmware — required for GRUB2 EFI boot, must match disk layout -->
+      <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>
+      <vmw:Config ovf:required="false" vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
+
     </VirtualHardwareSection>
 
-    <!-- ── OVF Properties ── -->
+    <!-- OVF Properties — configurable at deploy time in vCenter -->
     <ProductSection>
       <Info>Application configuration properties</Info>
       <Product>AsBuiltReport Manager</Product>
@@ -160,13 +117,12 @@
       <FullVersion>@@VERSION@@</FullVersion>
       <ProductUrl>https://www.asbuiltreport.com</ProductUrl>
 
-      <!-- Networking -->
       <Property ovf:key="guestinfo.hostname"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="asbuiltreport-manager">
         <Label>Hostname</Label>
-        <Description>Fully-qualified hostname for the appliance (e.g. abr.company.local)</Description>
+        <Description>Appliance hostname (e.g. abr.company.local)</Description>
       </Property>
 
       <Property ovf:key="guestinfo.ipaddress"
@@ -174,7 +130,7 @@
                 ovf:userConfigurable="true"
                 ovf:value="">
         <Label>IP Address (CIDR)</Label>
-        <Description>Static IP in CIDR notation, e.g. 192.168.1.50/24. Leave blank to use DHCP.</Description>
+        <Description>Static IP in CIDR notation e.g. 192.168.1.50/24. Leave blank for DHCP.</Description>
       </Property>
 
       <Property ovf:key="guestinfo.gateway"
@@ -182,7 +138,7 @@
                 ovf:userConfigurable="true"
                 ovf:value="">
         <Label>Default Gateway</Label>
-        <Description>Default gateway IP address. Required if IP Address is set.</Description>
+        <Description>Default gateway IP. Required if static IP is set.</Description>
       </Property>
 
       <Property ovf:key="guestinfo.dns"
@@ -190,48 +146,25 @@
                 ovf:userConfigurable="true"
                 ovf:value="8.8.8.8 8.8.4.4">
         <Label>DNS Servers</Label>
-        <Description>Space-separated list of DNS server IP addresses.</Description>
+        <Description>Space-separated DNS server IPs.</Description>
       </Property>
 
-      <!-- Security -->
       <Property ovf:key="guestinfo.password"
                 ovf:type="password"
                 ovf:userConfigurable="true"
                 ovf:value="">
-        <Label>Initial Root Password</Label>
-        <Description>Password for the root account. If empty, SSH password auth is disabled (key-only).</Description>
+        <Label>Root Password</Label>
+        <Description>Initial root password. Leave blank to disable password auth (SSH key only).</Description>
       </Property>
 
-      <!-- SSH -->
       <Property ovf:key="guestinfo.ssh_authorized_key"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">
         <Label>SSH Authorized Key</Label>
-        <Description>SSH public key to authorize for root login (optional).</Description>
+        <Description>SSH public key for root login (optional).</Description>
       </Property>
     </ProductSection>
-
-    <!-- ── Annotation ── -->
-    <AnnotationSection>
-      <Info>Appliance description</Info>
-      <Annotation>AsBuiltReport Manager v@@VERSION@@
-
-Web-based GUI for running AsBuiltReport PowerShell modules.
-Access the UI at: http://&lt;VM-IP&gt;:3001
-
-Components:
-  - app container:    node:20-slim / Express + React (port 3001)
-  - worker container: rockylinux:9 / PowerShell 7, VMware PowerCLI, 16+ AsBuiltReport modules
-
-Volumes:
-  /var/www/reports          — generated HTML/Word reports
-  /etc/asbuiltreport        — configuration files
-  /var/lib/asbuiltreport/ps-modules — custom PS modules
-
-Default credentials: root / (set at deploy time via OVF property)
-      </Annotation>
-    </AnnotationSection>
 
   </VirtualSystem>
 </Envelope>
