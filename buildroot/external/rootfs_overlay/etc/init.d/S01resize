@@ -1,15 +1,5 @@
 #!/bin/sh
-# /etc/init.d/S01resize — Fix GPT + extend partition + grow filesystem
-#
-# On first boot after vCenter deploys the OVA:
-#   - The VMDK virtual size is 40 GB but the GPT table only covers 6.5 GB
-#   - The backup GPT header is at sector 13631559 instead of 83886079
-#   - sda2 ends at sector 13631521 (6 GB) instead of using the full disk
-#
-# Steps:
-#   1. parted resizepart  → extends sda2 to 100% of the disk
-#                           (also fixes the GPT backup header location)
-#   2. resize2fs          → grows the ext4 filesystem to fill sda2
+# /etc/init.d/S01resize — Fix GPT + extend partition + grow filesystem on first boot
 
 SENTINEL="/var/lib/asbuiltreport/.resize-done"
 
@@ -18,55 +8,49 @@ case "$1" in
     [ -f "$SENTINEL" ] && exit 0
 
     ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null || echo "/dev/sda2")
-    DISK=$(echo "$ROOT_DEV" | sed 's/p\?[0-9]*$//')   # /dev/sda2 → /dev/sda
-    PART_NUM=$(echo "$ROOT_DEV" | grep -oE '[0-9]+$')  # /dev/sda2 → 2
+    DISK=$(echo "$ROOT_DEV" | sed 's/[0-9]*$//')
+    PART_NUM=$(echo "$ROOT_DEV" | grep -oE '[0-9]+$')
 
     DISK_SECTORS=$(cat /sys/class/block/$(basename "$DISK")/size 2>/dev/null || echo 0)
-    PART_END=$(cat /sys/class/block/$(basename "$ROOT_DEV")/size 2>/dev/null || echo 0)
-    # PART_END is size in 512-byte sectors; disk sectors from sysfs is total disk size
-    # Compare: if disk has significantly more sectors than partition end offset, grow
-    PART_START=$(cat /sys/class/block/sda/sda2/start 2>/dev/null || echo 1048610)
-    PART_CURRENT_END=$(( PART_START + PART_END - 1 ))
+    PART_SECTORS=$(cat /sys/class/block/$(basename "$ROOT_DEV")/size 2>/dev/null || echo 0)
+    PART_START=$(cat /sys/class/block/$(basename "$DISK")/$(basename "$ROOT_DEV")/start 2>/dev/null || echo 1048610)
+    PART_END=$(( PART_START + PART_SECTORS - 1 ))
+    AVAILABLE=$(( DISK_SECTORS - PART_END - 34 ))
 
-    echo "S01resize: disk=${DISK_SECTORS} sectors  partition ends at=${PART_CURRENT_END}"
+    echo "S01resize: disk=${DISK_SECTORS} sectors  partition ends=${PART_END}  free=${AVAILABLE}"
 
-    if [ "$DISK_SECTORS" -gt $(( PART_CURRENT_END + 2048 )) ]; then
-      echo "Extending $ROOT_DEV to fill disk..."
-
-      # Fix GPT backup header and resize partition to use 100% of disk.
-      # parted -s suppresses interactive prompts; the fix/ignore responses
-      # handle the GPT mismatch warning automatically in script mode.
-      parted -s "$DISK" resizepart "$PART_NUM" 100%
-
-      RC=$?
-      if [ $RC -ne 0 ]; then
-        # parted may exit non-zero on GPT warning even when it succeeded.
-        # Re-check partition size to determine actual result.
-        NEW_END=$(cat /sys/class/block/$(basename "$ROOT_DEV")/size 2>/dev/null || echo 0)
-        if [ "$NEW_END" -le "$PART_END" ]; then
-          echo "WARNING: parted resizepart failed (rc=$RC), trying with sgdisk..."
-          # Fallback: use sgdisk to move backup GPT to end of disk, then resize
-          sgdisk -e "$DISK" 2>/dev/null || true
-          sgdisk -d "$PART_NUM" -n "${PART_NUM}:${PART_START}:0" \
-                 -t "${PART_NUM}:8300" "$DISK" 2>/dev/null || true
-          partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" 2>/dev/null || true
-          sleep 1
-        fi
-      fi
-
-      # Inform kernel of the updated partition table
-      partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" 2>/dev/null || true
-      sleep 1
-
-      echo "Growing filesystem on $ROOT_DEV..."
-      resize2fs "$ROOT_DEV" && echo "resize2fs: OK" || echo "resize2fs: WARN (may need reboot)"
-
-      # Show result
-      NEW_KB=$(df -k / | awk 'NR==2{print $2}')
-      echo "Root filesystem: ${NEW_KB} KB ($(( NEW_KB / 1024 / 1024 )) GB)"
-    else
+    if [ "$AVAILABLE" -lt 204800 ]; then
       echo "S01resize: already full size, skipping."
+      mkdir -p "$(dirname $SENTINEL)" && touch "$SENTINEL"
+      exit 0
     fi
+
+    echo "S01resize: $(( AVAILABLE / 2048 )) MiB to claim — expanding..."
+
+    # Step 1: Fix GPT backup header (move it to physical end of disk)
+    if command -v sgdisk >/dev/null 2>&1; then
+      echo "  sgdisk -e: fixing GPT backup..."
+      sgdisk -e "$DISK" && echo "  sgdisk: OK" || echo "  sgdisk: WARN"
+    else
+      echo "  parted print fix: fixing GPT backup..."
+      printf "fix\n" | parted ---pretend-input-tty "$DISK" print >/dev/null 2>&1 || true
+    fi
+
+    # Step 2: Resize the partition to fill the disk
+    echo "  Resizing partition $PART_NUM to 100%..."
+    parted -s "$DISK" resizepart "$PART_NUM" 100% \
+      && echo "  resizepart: OK" \
+      || echo "  resizepart: WARN rc=$?"
+
+    # Reload partition table
+    partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" 2>/dev/null || true
+    sleep 2
+
+    # Step 3: Grow ext4 filesystem to fill the new partition
+    echo "  Growing filesystem..."
+    resize2fs "$ROOT_DEV" \
+      && echo "S01resize: done — $(df -h / | awk 'NR==2{print $2}') total" \
+      || echo "S01resize: resize2fs WARN" >&2
 
     mkdir -p "$(dirname $SENTINEL)"
     touch "$SENTINEL"

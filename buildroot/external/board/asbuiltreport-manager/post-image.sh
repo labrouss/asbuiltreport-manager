@@ -155,7 +155,23 @@ log "Raw image: $(du -sh "${RAW_IMG}" | cut -f1)  (${RAW_SIZE_BYTES} bytes)"
 
 # ── Step 4: Convert to streamOptimized VMDK ───────────────────────────────────
 VMDK="${BINARIES_DIR}/${APPLIANCE_NAME}-disk1.vmdk"
-log "Converting raw → streamOptimized VMDK..."
+
+# The raw image from genimage is only ~8.5 GB (rootfs + EFI).
+# vCenter reads the VMDK descriptor's virtual size for disk provisioning —
+# NOT the OVF ovf:capacity. We must expand the raw image to 40 GiB before
+# converting so the VMDK descriptor encodes 40 GiB as virtual size.
+# qemu-img resize extends with sparse zeroes — no extra disk space needed.
+DISK_SIZE_GIB=40
+DISK_SIZE_BYTES=$(( DISK_SIZE_GIB * 1024 * 1024 * 1024 ))
+DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
+
+RAW_SIZE_BYTES=$(stat -c %s "${RAW_IMG}")
+if [ "${RAW_SIZE_BYTES}" -lt "${DISK_SIZE_BYTES}" ]; then
+    log "Expanding raw image from $(( RAW_SIZE_BYTES / 1024 / 1024 / 1024 )) GiB → ${DISK_SIZE_GIB} GiB (sparse)..."
+    qemu-img resize -f raw "${RAW_IMG}" "${DISK_SIZE_GIB}G"
+fi
+
+log "Converting raw → streamOptimized VMDK (virtual=${DISK_SIZE_GIB} GiB)..."
 qemu-img convert \
     -f raw \
     -O vmdk \
@@ -167,14 +183,6 @@ qemu-img convert \
 VMDK_SIZE_BYTES=$(stat -c %s "${VMDK}")
 [ "${VMDK_SIZE_BYTES}" -gt 0 ] || die "VMDK is empty"
 
-# The raw image is ~6.5 GB (6 GB rootfs + 512 MB EFI).
-# The OVF must declare the VIRTUAL size as 40 GB — this is what vCenter
-# provisions on the datastore as a thin disk. The VM's resize2fs script
-# expands the ext4 filesystem into the remaining space on first boot.
-# We override the capacity to 40 GiB rather than using the raw image size.
-DISK_SIZE_GIB=40
-DISK_SIZE_BYTES=$(( DISK_SIZE_GIB * 1024 * 1024 * 1024 ))
-DISK_CAPACITY_SECTORS=$(( DISK_SIZE_BYTES / 512 ))
 VMDK_BASENAME=$(basename "${VMDK}")
 log "VMDK: virtual=${DISK_SIZE_GIB} GiB (declared to vCenter)  file=${VMDK_SIZE_BYTES} bytes (actual)"
 
