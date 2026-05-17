@@ -347,21 +347,21 @@ jobs:
           restore-keys: |
             br-dl-${{ env.BUILDROOT_VERSION }}-
 
-      # -- Buildroot output cache (toolchain + compiled packages) ---------------
+      # -- Buildroot output cache (toolchain + packages + rootfs image) ---------
       #
-      # Cache key covers every file that determines which packages are compiled:
-      #   - BUILDROOT_VERSION (toolchain, package recipes)
-      #   - defconfig         (package selection)
-      #   - linux fragment    (kernel config)
+      # Cache key covers every file that determines what gets compiled.
       #
-      # Cache HIT  (~3 min): skip the full make entirely; re-run only the two
-      #   post-scripts that inject fresh Docker tarballs and build the OVA.
+      # Cache HIT  (~5 min): skip the full make. Use cached rootfs.ext2 and
+      #   inject fresh Docker tarballs into it with debugfs. rootfs.ext2 MUST
+      #   come from a full Buildroot fakeroot pass — rebuilding it from
+      #   output/target directly (mkfs.ext4 -d) skips fakeroot and produces
+      #   a broken filesystem missing busybox symlinks (kernel panic at boot).
       #
       # Cache MISS (~90 min): full build, then save the output tree.
       #
-      # output/images/ is intentionally excluded: it holds rootfs.ext2 (38 GB
-      # with baked Docker tarballs) which must always be regenerated with the
-      # fresh tarballs from job 1, and would blow through the 10 GB cache limit.
+      # rootfs.ext2 is included in the cache despite being 1.4 GB because it
+      # is the only correct source for the fast path. The Docker tarballs
+      # (~1 GB) are NOT cached here — they're injected fresh from job 1.
       - name: Cache Buildroot output (toolchain + packages)
         id: cache-br-output
         uses: actions/cache@v4.2.3
@@ -372,6 +372,7 @@ jobs:
             output/staging
             output/target
             output/per-package
+            output/images/rootfs.ext2
             output/.config
             output/Makefile
           key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment') }}
@@ -394,25 +395,29 @@ jobs:
 
       # -- CACHE HIT: re-run post-scripts only (~3 min) -------------------------
       #
-      # The compiled target tree is already in output/target from the cache.
-      # Steps:
-      #   1. Re-apply the rootfs overlay (init scripts / configs may have changed)
-      #   2. Re-run post-build.sh  — injects fresh Docker image tarballs
-      #   3. Rebuild rootfs.ext2   — using mkfs.ext4 from the cached host toolchain
-      #   4. Re-run post-image.sh  — copies grub.cfg, runs genimage, builds VMDK+OVA
-      - name: "Cache HIT: fast path (re-run post-scripts only)"
+      # The full build is cached. rootfs.ext2 (built by Buildroot's fakeroot
+      # pass with correct busybox symlinks, device table, and ownership) is
+      # restored from cache. We must NOT rebuild it from output/target — that
+      # staging tree lacks fakeroot fixes and produces a kernel panic at boot.
+      #
+      # Instead we use debugfs to inject the fresh Docker image tarballs
+      # directly into the cached rootfs.ext2, then re-run post-image.sh.
+      - name: "Cache HIT: fast path (inject tarballs into cached rootfs)"
         if: steps.cache-br-output.outputs.cache-hit == 'true'
         run: |
           echo "Cache HIT — skipping full Buildroot build (~90 min saved)"
+          mkdir -p output/images
+
+          # Ensure rootfs.ext4 symlink exists
+          [ -f output/images/rootfs.ext2 ] || {
+            echo "ERROR: rootfs.ext2 not in cache — delete br-output-* cache and re-run."
+            exit 1
+          }
+          ln -sf rootfs.ext2 output/images/rootfs.ext4
+          echo "Cached rootfs.ext2: $(du -sh output/images/rootfs.ext2 | cut -f1)"
 
           echo ""
-          echo "==> Re-applying rootfs overlay..."
-          rsync -a --delete \
-            "${GITHUB_WORKSPACE}/buildroot/external/rootfs_overlay/" \
-            "${GITHUB_WORKSPACE}/output/target/"
-
-          echo ""
-          echo "==> Re-running post-build.sh..."
+          echo "==> Running post-build.sh to stage Docker tarballs..."
           export TARGET_DIR="${GITHUB_WORKSPACE}/output/target"
           export BINARIES_DIR="${GITHUB_WORKSPACE}/output/images"
           export BUILD_DIR="${GITHUB_WORKSPACE}/output/build"
@@ -420,31 +425,44 @@ jobs:
           bash buildroot/external/board/asbuiltreport-manager/post-build.sh
 
           echo ""
-          echo "==> Rebuilding rootfs.ext2 from cached target tree..."
-          mkdir -p output/images
-          rm -f output/images/rootfs.ext2 output/images/rootfs.ext4
-          output/host/sbin/mkfs.ext4 \
-            -d output/target \
-            -r 1 -N 0 -m 5 \
-            -L "rootfs" -I 256 -O ^64bit \
-            output/images/rootfs.ext2 "38G"
-          ln -sf rootfs.ext2 output/images/rootfs.ext4
-          echo "rootfs.ext2: $(du -sh output/images/rootfs.ext2 | cut -f1)"
+          echo "==> Injecting Docker tarballs into rootfs.ext2 using debugfs..."
+          # post-build.sh copied tarballs to output/target/var/lib/docker-preload/
+          # We inject them directly into the cached ext2 image without rebuilding it.
+          # This preserves all busybox symlinks and fakeroot-applied permissions.
+          debugfs -w -R "mkdir /var/lib/docker-preload" output/images/rootfs.ext2 2>/dev/null || true
+          for tarball in output/target/var/lib/docker-preload/*.tar.gz output/target/var/lib/docker-preload/*.tar; do
+            [ -f "${tarball}" ] || continue
+            BASENAME=$(basename "${tarball}")
+            echo "  Injecting: ${BASENAME} ($(du -sh "${tarball}" | cut -f1))"
+            debugfs -w -R "rm /var/lib/docker-preload/${BASENAME}" \
+              output/images/rootfs.ext2 2>/dev/null || true
+            debugfs -w -R "write ${tarball} /var/lib/docker-preload/${BASENAME}" \
+              output/images/rootfs.ext2
+          done
+
+          # Also inject the Docker Compose plugin
+          if [ -f output/target/usr/libexec/docker/cli-plugins/docker-compose ]; then
+            debugfs -w -R "mkdir /usr/libexec" output/images/rootfs.ext2 2>/dev/null || true
+            debugfs -w -R "mkdir /usr/libexec/docker" output/images/rootfs.ext2 2>/dev/null || true
+            debugfs -w -R "mkdir /usr/libexec/docker/cli-plugins" output/images/rootfs.ext2 2>/dev/null || true
+            debugfs -w -R "rm /usr/libexec/docker/cli-plugins/docker-compose" \
+              output/images/rootfs.ext2 2>/dev/null || true
+            debugfs -w -R "write output/target/usr/libexec/docker/cli-plugins/docker-compose /usr/libexec/docker/cli-plugins/docker-compose" \
+              output/images/rootfs.ext2
+            echo "  Docker Compose plugin injected."
+          fi
+
+          echo "rootfs.ext2 after injection: $(du -sh output/images/rootfs.ext2 | cut -f1)"
 
           echo ""
           echo "==> Re-running post-image.sh (grub-mkstandalone + bzImage inject + OVA)..."
-          # bzImage is not in output/images/ on a cache hit — copy it from the
-          # cached kernel build directory where Buildroot left it after compiling.
           BZIMAGE_SRC=$(find output/build/linux-* -name bzImage 2>/dev/null | head -1)
           if [[ -z "${BZIMAGE_SRC}" ]]; then
             echo "ERROR: bzImage not found in output/build/linux-* — cache may be incomplete."
-            echo "Delete the br-output-* cache entry and re-run to trigger a full build."
             exit 1
           fi
           cp "${BZIMAGE_SRC}" output/images/bzImage
-          echo "bzImage copied from ${BZIMAGE_SRC} ($(du -sh output/images/bzImage | cut -f1))"
-          # post-image.sh uses grub-mkstandalone from the cached host toolchain
-          # and debugfs to inject bzImage — efi-part/ is rebuilt from scratch
+          echo "bzImage: $(du -sh output/images/bzImage | cut -f1)"
           bash buildroot/external/board/asbuiltreport-manager/post-image.sh
         env:
           COMPOSE_VERSION: ${{ env.COMPOSE_VERSION }}
@@ -476,6 +494,7 @@ jobs:
             output/staging
             output/target
             output/per-package
+            output/images/rootfs.ext2
             output/.config
             output/Makefile
           key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment') }}
