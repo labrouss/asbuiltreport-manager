@@ -25,6 +25,12 @@ on:
         required: false
         default: false
 
+# Default permissions for all jobs.
+# contents:write is required by softprops/action-gh-release to create/update releases.
+# packages:read is needed to pull base images if ever using GHCR.
+permissions:
+  contents: write
+
 # ── Shared constants ──────────────────────────────────────────────────────────
 env:
   BUILDROOT_VERSION: ${{ github.event.inputs.buildroot_version || '2024.02.6' }}
@@ -60,11 +66,11 @@ jobs:
       # ── Checkout ─────────────────────────────────────────────────────────────
       # Full repo needed: Dockerfile, frontend/, backend/, worker/, docker-compose.yml
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       # ── Docker Buildx ─────────────────────────────────────────────────────────
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3.10.0
         with:
           driver-opts: image=moby/buildkit:latest
 
@@ -74,7 +80,7 @@ jobs:
       #   and .dockerignore (affects what reaches the daemon).
       # Changing worker/ or buildroot/ does NOT bust this cache.
       - name: Cache app image layers
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: /tmp/.buildx-cache-app
           key: buildx-app-${{ hashFiles('Dockerfile', '.dockerignore', 'frontend/**', 'backend/**') }}
@@ -88,7 +94,7 @@ jobs:
       # the Dockerfile so those changes hit only cheap layers — they bust the
       # cache key here but Buildx will still reuse the costly earlier layers.
       - name: Cache worker image layers
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: /tmp/.buildx-cache-worker
           key: buildx-worker-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
@@ -103,7 +109,7 @@ jobs:
       - name: Restore cached worker tarball
         id: restore-worker-tarball
         if: ${{ github.event.inputs.skip_worker_rebuild == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: ${{ env.IMAGES_DIR }}/${{ env.WORKER_IMAGE }}.tar.gz
           key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
@@ -123,7 +129,7 @@ jobs:
       # The app build context is kept small by .dockerignore which excludes
       # buildroot/, worker/, node_modules, .git, etc.
       - name: Build app image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6.15.0
         with:
           context: .
           file: Dockerfile
@@ -138,7 +144,7 @@ jobs:
       # This step is skipped when skip_worker_rebuild=true AND a tarball was restored.
       - name: Build worker image
         if: ${{ github.event.inputs.skip_worker_rebuild != 'true' }}
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6.15.0
         with:
           context: worker
           file: worker/Dockerfile
@@ -204,7 +210,7 @@ jobs:
       # restore it in future runs without rebuilding the image from scratch.
       - name: Cache worker tarball for future runs
         if: ${{ github.event.inputs.skip_worker_rebuild != 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: ${{ env.IMAGES_DIR }}/${{ env.WORKER_IMAGE }}.tar.gz
           key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
@@ -226,7 +232,7 @@ jobs:
       # Job 2 downloads this artifact before running Buildroot so post-build.sh
       # finds the tarballs at IMAGES_DIR and copies them into /var/lib/docker-preload/.
       - name: Upload Docker image tarballs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: docker-images
           path: |
@@ -259,11 +265,11 @@ jobs:
       # ── Checkout ─────────────────────────────────────────────────────────────
       # Needs: buildroot/external/** (defconfig, overlay, board scripts, package)
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       # ── Restore Docker image tarballs from job 1 ─────────────────────────────
       - name: Download Docker image tarballs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.2.1
         with:
           name: docker-images
           path: ${{ env.IMAGES_DIR }}
@@ -320,7 +326,7 @@ jobs:
       # -- Buildroot source cache ------------------------------------------------
       - name: Cache Buildroot source tree
         id: cache-br-src
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: buildroot-${{ env.BUILDROOT_VERSION }}
           key: br-src-${{ env.BUILDROOT_VERSION }}
@@ -334,7 +340,7 @@ jobs:
 
       # -- Buildroot package download cache -------------------------------------
       - name: Cache Buildroot package downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: downloads
           key: br-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig') }}
@@ -358,7 +364,7 @@ jobs:
       # fresh tarballs from job 1, and would blow through the 10 GB cache limit.
       - name: Cache Buildroot output (toolchain + packages)
         id: cache-br-output
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: |
             output/build
@@ -458,7 +464,7 @@ jobs:
       # a failed build never overwrites a known-good cached tree.
       - name: Save Buildroot output cache
         if: steps.cache-br-output.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v4.2.3
         with:
           path: |
             output/build
@@ -512,7 +518,7 @@ jobs:
 
       # ── Upload OVA artifact ───────────────────────────────────────────────────
       - name: Upload OVA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: asbuiltreport-manager-ova-${{ steps.version.outputs.version }}
           path: |
@@ -524,7 +530,7 @@ jobs:
       # ── GitHub Release (tag builds only) ─────────────────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.3.2
         with:
           files: |
             output/images/asbuiltreport-manager-*.ova
