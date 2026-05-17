@@ -453,7 +453,7 @@ jobs:
           fi
 
           # Also ensure critical directories exist in the image
-          for dir in /dev/pts /dev/shm /var/lib/docker; do
+          for dir in /dev/pts /dev/shm /var/lib/docker /sys/fs /sys/fs/cgroup; do
             debugfs -w -R "mkdir ${dir}" output/images/rootfs.ext2 2>/dev/null || true
           done
 

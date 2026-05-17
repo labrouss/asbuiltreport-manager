@@ -121,10 +121,14 @@ fi
 # runtime). The fstab entries for devpts and tmpfs need their mount points to
 # exist as real directories in the image, otherwise busybox mount fails silently.
 # =============================================================================
-log "Ensuring /dev/pts and /dev/shm exist in rootfs.ext4..."
+log "Ensuring critical directories exist in rootfs.ext4..."
 debugfs -w -R "mkdir /dev/pts" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
 debugfs -w -R "mkdir /dev/shm" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
 debugfs -w -R "mkdir /var/lib/docker" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+# /sys/fs/cgroup must exist as a real directory for the cgroup mount
+debugfs -w -R "mkdir /sys" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+debugfs -w -R "mkdir /sys/fs" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+debugfs -w -R "mkdir /sys/fs/cgroup" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
 
 # Verify /dev/pts
 if debugfs -R "stat /dev/pts" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null | grep -q "Type: dir"; then
