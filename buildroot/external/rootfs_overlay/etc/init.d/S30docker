@@ -1,33 +1,42 @@
 #!/bin/sh
-# /etc/init.d/S30docker
+# /etc/init.d/S30docker — Start Docker daemon
+# Requires: /proc /sys /dev/pts mounted (done in rcS before S* scripts run)
 
-DOCKER_OPTS="--storage-driver=overlay2 --log-driver=json-file \
-  --log-opt max-size=50m --log-opt max-file=3 \
-  --iptables=true --ip-forward=true"
+DOCKER_OPTS="--storage-driver=overlay2 \
+  --log-driver=json-file \
+  --log-opt max-size=50m \
+  --log-opt max-file=3 \
+  --iptables=true \
+  --ip-forward=true"
 PIDFILE=/var/run/dockerd.pid
+LOGFILE=/var/log/dockerd.log
 
 case "$1" in
   start)
     echo "Starting Docker..."
-    # Ensure cgroups are mounted
-    mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || \
-      mount -t cgroup none /sys/fs/cgroup 2>/dev/null || true
 
+    # Docker requires cgroup2 (preferred) or cgroup v1
+    if ! mountpoint -q /sys/fs/cgroup; then
+      mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || \
+        mount -t cgroup  none /sys/fs/cgroup -o all 2>/dev/null || true
+    fi
+
+    # Start dockerd in background, log to file
     start-stop-daemon --start --quiet --background \
       --pidfile "$PIDFILE" --make-pidfile \
-      --exec /usr/bin/dockerd -- $DOCKER_OPTS
+      --exec /usr/bin/dockerd -- $DOCKER_OPTS >> "$LOGFILE" 2>&1
 
-    # Wait for Docker socket
+    # Wait up to 30s for the socket
     RETRIES=30
-    while [ ! -S /var/run/docker.sock ] && [ $RETRIES -gt 0 ]; do
+    while [ ! -S /var/run/docker.sock ] && [ "$RETRIES" -gt 0 ]; do
       sleep 1
       RETRIES=$((RETRIES - 1))
     done
 
     if [ -S /var/run/docker.sock ]; then
-      echo "Docker started"
+      echo "Docker started."
     else
-      echo "ERROR: Docker socket not available after 30s" >&2
+      echo "ERROR: Docker socket not available after 30s. Check $LOGFILE" >&2
     fi
     ;;
   stop)
@@ -38,7 +47,15 @@ case "$1" in
   restart)
     "$0" stop; sleep 2; "$0" start
     ;;
+  status)
+    if [ -S /var/run/docker.sock ]; then
+      echo "Docker is running."
+      docker info --format 'Containers: {{.Containers}}  Images: {{.Images}}' 2>/dev/null || true
+    else
+      echo "Docker is NOT running."
+    fi
+    ;;
   *)
-    echo "Usage: $0 {start|stop|restart}"
+    echo "Usage: $0 {start|stop|restart|status}"
     exit 1
 esac

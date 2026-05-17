@@ -1,43 +1,50 @@
 #!/bin/sh
-# /etc/init.d/S10network — network bringup
-# Reads /etc/network/config written by S05ovf-init
-. /etc/network/config 2>/dev/null || true
+# /etc/init.d/S10network — Bring up network
+# /etc/network/config is written by S05ovf-init
+
+NETCFG="/etc/network/config"
 
 case "$1" in
   start)
     echo "Starting network..."
+
     # Bring up loopback
     ip link set lo up
     ip addr add 127.0.0.1/8 dev lo 2>/dev/null || true
 
-    # Bring up first ethernet interface
-    IFACE=$(ip -o link show | awk -F': ' '!/lo/{print $2; exit}')
+    # Discover first ethernet interface
+    IFACE=$(ip -o link show | awk -F': ' '$2 !~ /lo|sit/ {print $2; exit}')
     [ -z "$IFACE" ] && IFACE="eth0"
-
     ip link set "$IFACE" up
 
-    if [ "$NETWORK_MODE" = "static" ] && [ -n "$IP_CIDR" ]; then
-      ip addr add "$IP_CIDR" dev "$IFACE"
-      [ -n "$GATEWAY" ] && ip route add default via "$GATEWAY"
+    # Read network config written by S05ovf-init
+    if [ -f "$NETCFG" ]; then
+      . "$NETCFG"
+    else
+      NETWORK_MODE="dhcp"
+    fi
+
+    if [ "${NETWORK_MODE:-dhcp}" = "static" ] && [ -n "${IP_CIDR:-}" ]; then
+      ip addr add "$IP_CIDR" dev "$IFACE" 2>/dev/null || true
+      [ -n "${GATEWAY:-}" ] && ip route add default via "$GATEWAY" 2>/dev/null || true
       # Write resolv.conf
-      > /etc/resolv.conf
-      for dns in $DNS_SERVERS; do
+      : > /etc/resolv.conf
+      for dns in ${DNS_SERVERS:-8.8.8.8 8.8.4.4}; do
         echo "nameserver $dns" >> /etc/resolv.conf
       done
-      echo "Static IP configured: $IP_CIDR"
+      echo "Static IP: $IP_CIDR"
     else
-      udhcpc -i "$IFACE" -s /usr/share/udhcpc/default.script -b -q
-      echo "DHCP configured on $IFACE"
+      udhcpc -i "$IFACE" -s /usr/share/udhcpc/default.script -b -q \
+        2>/dev/null && echo "DHCP on $IFACE" || echo "DHCP failed on $IFACE"
     fi
     ;;
   stop)
-    echo "Stopping network..."
     ip link set lo down 2>/dev/null || true
-    IFACE=$(ip -o link show | awk -F': ' '!/lo/{print $2; exit}')
+    IFACE=$(ip -o link show | awk -F': ' '$2 !~ /lo|sit/ {print $2; exit}')
     [ -n "$IFACE" ] && ip link set "$IFACE" down
     ;;
   restart)
-    "$0" stop; "$0" start
+    "$0" stop; sleep 1; "$0" start
     ;;
   *)
     echo "Usage: $0 {start|stop|restart}"

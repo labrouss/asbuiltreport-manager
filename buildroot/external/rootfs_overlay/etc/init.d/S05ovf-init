@@ -1,7 +1,8 @@
 #!/bin/sh
 # /etc/init.d/S05ovf-init
-# Reads VMware guestinfo OVF properties and configures hostname + network.
-# Runs every boot but only applies password/key on first run (sentinel).
+# Reads VMware guestinfo OVF properties and configures the system.
+# Runs every boot but only applies password/SSH key on first run.
+# The rootfs is already rw when this runs (remounted in rcS).
 
 SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
 NETCFG="/etc/network/config"
@@ -21,18 +22,23 @@ case "$1" in
     PASSWORD=$(get_guestinfo password)
     SSH_KEY=$(get_guestinfo ssh_authorized_key)
 
-    # Defaults
     HOSTNAME="${HOSTNAME:-asbuiltreport-manager}"
     DNS_SERVERS="${DNS_SERVERS:-8.8.8.8 8.8.4.4}"
 
     # Set hostname
     echo "$HOSTNAME" > /etc/hostname
     hostname "$HOSTNAME"
+    # Update /etc/hosts
+    if grep -q "127.0.1.1" /etc/hosts 2>/dev/null; then
+      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$HOSTNAME/" /etc/hosts
+    else
+      echo "127.0.1.1	$HOSTNAME" >> /etc/hosts
+    fi
 
     # Write network config for S10network
     mkdir -p "$(dirname $NETCFG)"
     if [ -n "$IP_CIDR" ]; then
-      cat > "$NETCFG" <<EOF
+      cat > "$NETCFG" << EOF
 NETWORK_MODE=static
 IP_CIDR="$IP_CIDR"
 GATEWAY="$GATEWAY"
@@ -42,7 +48,7 @@ EOF
       echo "NETWORK_MODE=dhcp" > "$NETCFG"
     fi
 
-    # One-time: set password and SSH key
+    # One-time: password and SSH key
     if [ ! -f "$SENTINEL" ]; then
       if [ -n "$PASSWORD" ]; then
         echo "root:$PASSWORD" | chpasswd
@@ -59,8 +65,7 @@ EOF
 
     echo "OVF init complete."
     ;;
-  stop|restart)
-    ;;
+  stop|restart) ;;
   *)
     echo "Usage: $0 {start|stop}"
     exit 1

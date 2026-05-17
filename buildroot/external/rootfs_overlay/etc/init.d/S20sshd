@@ -4,12 +4,17 @@
 case "$1" in
   start)
     echo "Starting sshd..."
-    [ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A -q
-    /usr/sbin/sshd
+    mkdir -p /etc/ssh
+    # Generate host keys if missing (needs rw filesystem)
+    if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+      ssh-keygen -A -q 2>&1 && echo "SSH host keys generated." || \
+        echo "WARNING: Could not generate SSH host keys" >&2
+    fi
+    /usr/sbin/sshd && echo "sshd started." || echo "ERROR: sshd failed" >&2
     ;;
   stop)
-    echo "Stopping sshd..."
-    kill "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null || true
+    kill "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null || \
+      pkill sshd 2>/dev/null || true
     ;;
   restart)
     "$0" stop; sleep 1; "$0" start

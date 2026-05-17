@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
 # post-build.sh — AsBuiltReport Manager OVA
-#
-# Runs after the Buildroot rootfs is assembled but before the filesystem
-# image is written. Mirrors the san-manager post-build.sh pattern exactly.
-#
-# This script:
-#   1. Downloads Docker Compose plugin static binary (Buildroot's
-#      BR2_PACKAGE_DOCKER_COMPOSE installs the compose package but we also
-#      want the CLI plugin path for 'docker compose' subcommand)
-#   2. Copies pre-saved Docker image tarballs into /var/lib/docker-preload/
-#   3. Creates required bind-mount directories
-#   4. Sets correct permissions on init scripts and overlay files
-#   5. Writes /etc/inittab (busybox init — no systemd)
 # =============================================================================
 set -euo pipefail
 
@@ -28,7 +16,6 @@ DOCKER_IMAGES_SRC="${EXTERNAL}/board/asbuiltreport-manager/docker-images"
 
 info()  { echo "[post-build] INFO:  $*"; }
 warn()  { echo "[post-build] WARN:  $*" >&2; }
-error() { echo "[post-build] ERROR: $*" >&2; exit 1; }
 
 # =============================================================================
 # 1. Docker Compose CLI plugin
@@ -54,70 +41,89 @@ if [[ -d "${DOCKER_IMAGES_SRC}" ]]; then
     shopt -s nullglob
     IMAGE_FILES=("${DOCKER_IMAGES_SRC}"/*.tar "${DOCKER_IMAGES_SRC}"/*.tar.gz)
     shopt -u nullglob
-
     if (( ${#IMAGE_FILES[@]} > 0 )); then
-        info "Staging ${#IMAGE_FILES[@]} Docker image tarball(s) into rootfs..."
+        info "Staging ${#IMAGE_FILES[@]} Docker image tarball(s)..."
         for img in "${IMAGE_FILES[@]}"; do
             BASENAME=$(basename "${img}")
             cp "${img}" "${PRELOAD_DIR}/${BASENAME}"
             info "  → ${BASENAME}  ($(du -sh "${PRELOAD_DIR}/${BASENAME}" | cut -f1))"
         done
     else
-        warn "No image tarballs in ${DOCKER_IMAGES_SRC}"
-        warn "Expected: asbuiltreport-app.tar.gz  asbuiltreport-worker.tar.gz"
-        warn "The VM will need internet access on first boot to pull images."
+        warn "No image tarballs found in ${DOCKER_IMAGES_SRC}"
     fi
 else
     warn "docker-images directory not found: ${DOCKER_IMAGES_SRC}"
 fi
 
 # =============================================================================
-# 3. Bind-mount directories
+# 3. Required directories that must exist in the rootfs image
 # =============================================================================
+# /dev/pts and /dev/shm are listed in fstab but missing from rootfs → mount fails
+install -d -m 1777 "${TARGET_DIR}/dev/pts"
+install -d -m 1777 "${TARGET_DIR}/dev/shm"
+install -d -m 0755 "${TARGET_DIR}/run/network"
+install -d -m 0755 "${TARGET_DIR}/var/lib/asbuiltreport"
 install -d -m 0755 "${TARGET_DIR}/var/www/reports"
 install -d -m 0755 "${TARGET_DIR}/etc/asbuiltreport"
 install -d -m 0755 "${TARGET_DIR}/var/lib/asbuiltreport/ps-modules"
-install -d -m 0755 "${TARGET_DIR}/var/lib/asbuiltreport"
+install -d -m 0755 "${TARGET_DIR}/var/lib/docker-preload"
 
 # =============================================================================
-# 4. Init script permissions (busybox init requires +x)
+# 4. Write /etc/fstab with correct mount points
 # =============================================================================
-for script in "${TARGET_DIR}"/etc/init.d/S*; do
-    [[ -f "${script}" ]] && chmod 0755 "${script}"
-done
+cat > "${TARGET_DIR}/etc/fstab" << 'EOF'
+# <file system>  <mount pt>  <type>   <options>                       <dump>  <pass>
+/dev/sda2        /           ext4     rw,noatime                      0       1
+proc             /proc       proc     defaults                         0       0
+devpts           /dev/pts    devpts   defaults,gid=5,mode=620          0       0
+tmpfs            /dev/shm    tmpfs    mode=1777                        0       0
+tmpfs            /tmp        tmpfs    mode=1777                        0       0
+tmpfs            /run        tmpfs    mode=0755,nosuid,nodev           0       0
+sysfs            /sys        sysfs   defaults                         0       0
+EOF
 
-chmod 0755 "${TARGET_DIR}"/usr/local/bin/abr-*.sh 2>/dev/null || true
-
 # =============================================================================
-# 5. /etc/inittab — busybox init
-#    Replaces any default that Buildroot may have written.
+# 5. Write /etc/inittab — busybox init with proper mounts before rcS
 # =============================================================================
-cat > "${TARGET_DIR}/etc/inittab" <<'EOF'
+cat > "${TARGET_DIR}/etc/inittab" << 'EOF'
 # /etc/inittab — busybox init
 
+# sysinit: mount filesystems and run S* scripts
 ::sysinit:/etc/init.d/rcS
 
 # Respawn management console on tty1
 tty1::respawn:/usr/local/bin/abr-console.sh
 
-# Allow root login on ttyS0 (serial console — useful for VMware remote console)
+# Serial console on ttyS0
 ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100
 
 # Ctrl-Alt-Del
 ::ctrlaltdel:/sbin/reboot
 
-# Shutdown actions
+# Shutdown
 ::shutdown:/etc/init.d/S40asbuiltreport stop
 ::shutdown:/etc/init.d/S30docker stop
-::shutdown:/sbin/swapoff -a
 ::shutdown:/bin/umount -a -r
 EOF
 
 # =============================================================================
-# 6. /etc/init.d/rcS — runs all S* scripts in order
+# 6. Write /etc/init.d/rcS — mounts first, then S* scripts
 # =============================================================================
-cat > "${TARGET_DIR}/etc/init.d/rcS" <<'EOF'
+cat > "${TARGET_DIR}/etc/init.d/rcS" << 'EOF'
 #!/bin/sh
+# Mount critical filesystems before running init scripts
+# The root filesystem is mounted read-only by the kernel; remount rw first.
+mount -o remount,rw /
+
+# Mount virtual filesystems
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devpts   devpts   /dev/pts  -o gid=5,mode=620
+mount -t tmpfs    tmpfs    /dev/shm  -o mode=1777
+mount -t tmpfs    tmpfs    /tmp      -o mode=1777
+mount -t tmpfs    tmpfs    /run      -o mode=0755,nosuid,nodev
+
+# Run S* init scripts in order
 for script in /etc/init.d/S??*; do
     [ -x "$script" ] || continue
     "$script" start
@@ -126,20 +132,28 @@ EOF
 chmod 0755 "${TARGET_DIR}/etc/init.d/rcS"
 
 # =============================================================================
-# 7. SSH config
+# 7. Init script permissions
 # =============================================================================
-mkdir -p "${TARGET_DIR}/etc/ssh"
-cat > "${TARGET_DIR}/etc/ssh/sshd_config" <<'EOF'
-Port 22
-Protocol 2
-HostKey /etc/ssh/ssh_host_ed25519_key
-HostKey /etc/ssh/ssh_host_rsa_key
-PermitRootLogin prohibit-password
-PasswordAuthentication yes
-PubkeyAuthentication yes
-AuthorizedKeysFile .ssh/authorized_keys
-X11Forwarding no
-PrintMotd yes
-EOF
+for script in "${TARGET_DIR}"/etc/init.d/S*; do
+    [[ -f "${script}" ]] && chmod 0755 "${script}"
+done
+chmod 0755 "${TARGET_DIR}"/usr/local/bin/abr-*.sh 2>/dev/null || true
+
+# =============================================================================
+# 8. Remove duplicate/conflicting init scripts that Buildroot may have added
+#    from other packages (openssh, docker-engine add their own S* scripts
+#    which conflict with ours)
+# =============================================================================
+# Keep only our scripts — remove any that Buildroot packages auto-install
+for unwanted in \
+    "${TARGET_DIR}/etc/init.d/S40network" \
+    "${TARGET_DIR}/etc/init.d/S60dockerd" \
+    "${TARGET_DIR}/etc/init.d/S50sshd"
+do
+    if [[ -f "${unwanted}" ]]; then
+        info "Removing conflicting init script: $(basename ${unwanted})"
+        rm -f "${unwanted}"
+    fi
+done
 
 info "post-build.sh complete."
