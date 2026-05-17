@@ -433,6 +433,16 @@ jobs:
 
           echo ""
           echo "==> Re-running post-image.sh (grub-mkstandalone + bzImage inject + OVA)..."
+          # bzImage is not in output/images/ on a cache hit — copy it from the
+          # cached kernel build directory where Buildroot left it after compiling.
+          BZIMAGE_SRC=$(find output/build/linux-* -name bzImage 2>/dev/null | head -1)
+          if [[ -z "${BZIMAGE_SRC}" ]]; then
+            echo "ERROR: bzImage not found in output/build/linux-* — cache may be incomplete."
+            echo "Delete the br-output-* cache entry and re-run to trigger a full build."
+            exit 1
+          fi
+          cp "${BZIMAGE_SRC}" output/images/bzImage
+          echo "bzImage copied from ${BZIMAGE_SRC} ($(du -sh output/images/bzImage | cut -f1))"
           # post-image.sh uses grub-mkstandalone from the cached host toolchain
           # and debugfs to inject bzImage — efi-part/ is rebuilt from scratch
           bash buildroot/external/board/asbuiltreport-manager/post-image.sh
