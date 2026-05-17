@@ -2,7 +2,6 @@
 # buildroot/external/configs/asbuiltreport_manager_defconfig
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
-# Cache-bust: 2026-05-17-v4 (parted resize, chrony.conf, motd, profile.d)
 #
 # All symbols validated against the san-manager reference defconfig which
 # is confirmed working on Buildroot 2024.02.9.
