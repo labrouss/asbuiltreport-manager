@@ -1,0 +1,33 @@
+#!/bin/sh
+# /etc/init.d/S30cgroupfs — Mount cgroup filesystem hierarchy
+# Docker and containerd require cgroups to manage container resources.
+# Run before S30docker (same number means alphabetical — cgroupfs < docker).
+
+case "$1" in
+  start)
+    echo "Mounting cgroupfs hierarchy:"
+
+    # Try cgroup v2 first (unified hierarchy, preferred by modern runc)
+    if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+      if mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null; then
+        echo "  cgroup2 mounted at /sys/fs/cgroup"
+      else
+        # Fall back to cgroup v1
+        mount -t tmpfs none /sys/fs/cgroup -o mode=755 2>/dev/null || true
+        for subsys in cpu cpuacct cpuset memory blkio devices freezer net_cls pids; do
+          mkdir -p /sys/fs/cgroup/$subsys
+          mount -t cgroup cgroup /sys/fs/cgroup/$subsys \
+            -o $subsys 2>/dev/null || true
+        done
+        echo "  cgroup v1 mounted"
+      fi
+    else
+      echo "  cgroup already mounted"
+    fi
+    echo "OK"
+    ;;
+  stop|restart) ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+esac

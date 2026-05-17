@@ -113,6 +113,26 @@ else
     die "/boot/bzImage injection failed — kernel will not be found at boot"
 fi
 
+# =============================================================================
+# 2b. Ensure /dev/pts and /dev/shm exist in the rootfs image
+#
+# Buildroot's fakeroot pass creates the ext4 from output/target/ but does NOT
+# preserve directories created in output/target/dev/ (devtmpfs handles /dev at
+# runtime). The fstab entries for devpts and tmpfs need their mount points to
+# exist as real directories in the image, otherwise busybox mount fails silently.
+# =============================================================================
+log "Ensuring /dev/pts and /dev/shm exist in rootfs.ext4..."
+debugfs -w -R "mkdir /dev/pts" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+debugfs -w -R "mkdir /dev/shm" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+debugfs -w -R "mkdir /var/lib/docker" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null || true
+
+# Verify /dev/pts
+if debugfs -R "stat /dev/pts" "${BINARIES_DIR}/rootfs.ext4" 2>/dev/null | grep -q "Type: dir"; then
+    log "✓ /dev/pts exists in rootfs.ext4"
+else
+    warn "/dev/pts could not be created — devpts mount may fail at boot"
+fi
+
 # ── Step 3: genimage → raw disk image ─────────────────────────────────────────
 rm -rf "${GENIMAGE_TMP}"
 log "Running genimage..."

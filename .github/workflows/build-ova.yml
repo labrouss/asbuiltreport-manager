@@ -452,7 +452,10 @@ jobs:
             echo "  Docker Compose plugin injected."
           fi
 
-          echo "rootfs.ext2 after injection: $(du -sh output/images/rootfs.ext2 | cut -f1)"
+          # Also ensure critical directories exist in the image
+          for dir in /dev/pts /dev/shm /var/lib/docker; do
+            debugfs -w -R "mkdir ${dir}" output/images/rootfs.ext2 2>/dev/null || true
+          done
 
           echo ""
           echo "==> Re-running post-image.sh (grub-mkstandalone + bzImage inject + OVA)..."
