@@ -75,11 +75,7 @@ cat > "${TARGET_DIR}/etc/fstab" << 'EOF'
 # <file system>  <mount pt>  <type>   <options>                       <dump>  <pass>
 /dev/sda2        /           ext4     rw,noatime                      0       1
 proc             /proc       proc     defaults                         0       0
-devpts           /dev/pts    devpts   defaults,gid=5,mode=620          0       0
-tmpfs            /dev/shm    tmpfs    mode=1777                        0       0
-tmpfs            /tmp        tmpfs    mode=1777                        0       0
-tmpfs            /run        tmpfs    mode=0755,nosuid,nodev           0       0
-sysfs            /sys        sysfs   defaults                         0       0
+sysfs            /sys        sysfs    defaults                         0       0
 EOF
 
 # =============================================================================
@@ -118,6 +114,14 @@ mount -o remount,rw /
 # Mount virtual filesystems
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
+
+# devtmpfs replaces /dev entirely — /dev/pts and /dev/shm are hidden
+# until we create them on the live devtmpfs after it's mounted
+# (devtmpfs is auto-mounted by the kernel at boot since CONFIG_DEVTMPFS_MOUNT=y)
+# Create the mount point directories on the live devtmpfs
+mkdir -p /dev/pts /dev/shm
+
+# Now mount devpts and tmpfs on top of them
 mount -t devpts   devpts   /dev/pts  -o gid=5,mode=620
 mount -t tmpfs    tmpfs    /dev/shm  -o mode=1777
 mount -t tmpfs    tmpfs    /tmp      -o mode=1777

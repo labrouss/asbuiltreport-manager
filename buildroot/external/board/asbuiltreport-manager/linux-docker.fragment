@@ -6,6 +6,12 @@
 #
 # Mirrors the san-manager linux-docker.fragment exactly.
 
+# ── devtmpfs — kernel auto-mounts /dev before init ───────────────────────────
+# Required so that /dev/sda2, /dev/null etc. exist when rcS runs.
+# Without this /dev is empty and mkdir /dev/pts fails.
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
 # ── Namespaces (required by all container runtimes) ───────────────────────────
 CONFIG_NAMESPACES=y
 CONFIG_UTS_NS=y
@@ -23,7 +29,10 @@ CONFIG_CPUSETS=y
 CONFIG_CGROUP_CPUACCT=y
 CONFIG_MEMCG=y
 CONFIG_CGROUP_SCHED=y
+CONFIG_FAIR_GROUP_SCHED=y
+CONFIG_CFS_BANDWIDTH=y
 CONFIG_BLK_CGROUP=y
+CONFIG_BLK_CGROUP_THROTTLE=y
 
 # ── Overlay filesystem (Docker storage driver) ────────────────────────────────
 CONFIG_OVERLAY_FS=y

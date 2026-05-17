@@ -3,6 +3,7 @@
 
 PIDFILE=/var/run/dockerd.pid
 LOGFILE=/var/log/dockerd.log
+SOCKET=/var/run/docker.sock
 DOCKER_OPTS="--storage-driver=overlay2 \
   --log-driver=json-file \
   --log-opt max-size=50m \
@@ -14,53 +15,61 @@ case "$1" in
   start)
     echo "Starting Docker..."
 
-    # Ensure /var/lib/docker exists (may be missing on first boot before resize)
-    mkdir -p /var/lib/docker
-
-    # Mount cgroup2 (required by containerd/runc)
-    if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
-      mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || \
-        mount -t cgroup  none /sys/fs/cgroup -o all 2>/dev/null || true
+    # Bail if already running
+    if [ -S "$SOCKET" ]; then
+      echo "Docker already running."
+      exit 0
     fi
 
-    # Load kernel modules needed by Docker networking
-    modprobe overlay     2>/dev/null || true
-    modprobe br_netfilter 2>/dev/null || true
-    modprobe xt_conntrack 2>/dev/null || true
+    mkdir -p /var/lib/docker /var/run/docker
 
     # Enable IP forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
 
-    # Start dockerd
-    start-stop-daemon --start --quiet --background \
-      --pidfile "$PIDFILE" --make-pidfile \
-      --exec /usr/bin/dockerd -- $DOCKER_OPTS >> "$LOGFILE" 2>&1
+    # Load overlay kernel module (required for overlay2 storage driver)
+    modprobe overlay 2>/dev/null || true
 
-    # Wait up to 60s for the socket (first boot is slow due to storage init)
+    # Start dockerd directly in background via sh, capturing PID
+    /usr/bin/dockerd $DOCKER_OPTS >> "$LOGFILE" 2>&1 &
+    DOCKER_PID=$!
+    echo "$DOCKER_PID" > "$PIDFILE"
+
+    # Wait up to 60s for the Unix socket to appear
     RETRIES=60
-    while [ ! -S /var/run/docker.sock ] && [ "$RETRIES" -gt 0 ]; do
+    while [ "$RETRIES" -gt 0 ]; do
+      if [ -S "$SOCKET" ]; then
+        echo "Docker started (pid $DOCKER_PID)."
+        exit 0
+      fi
+      # Check process is still alive
+      if ! kill -0 "$DOCKER_PID" 2>/dev/null; then
+        echo "ERROR: dockerd exited unexpectedly. Check $LOGFILE" >&2
+        tail -5 "$LOGFILE" >&2 2>/dev/null
+        exit 1
+      fi
       sleep 1
       RETRIES=$((RETRIES - 1))
     done
 
-    if [ -S /var/run/docker.sock ]; then
-      echo "Docker started."
-    else
-      echo "ERROR: Docker socket not available after 60s. Check $LOGFILE" >&2
-      tail -20 "$LOGFILE" >&2 2>/dev/null || true
-    fi
+    echo "ERROR: Docker socket not available after 60s. Check $LOGFILE" >&2
+    tail -10 "$LOGFILE" >&2 2>/dev/null
+    exit 1
     ;;
   stop)
     echo "Stopping Docker..."
-    start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
-    rm -f "$PIDFILE"
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat $PIDFILE)" 2>/dev/null || true
+      rm -f "$PIDFILE"
+    else
+      pkill dockerd 2>/dev/null || true
+    fi
     ;;
   restart)
     "$0" stop; sleep 2; "$0" start
     ;;
   status)
-    if [ -S /var/run/docker.sock ]; then
-      echo "Docker is running."
+    if [ -S "$SOCKET" ]; then
+      echo "Docker is running (pid $(cat $PIDFILE 2>/dev/null))."
       docker info --format 'Containers: {{.Containers}}  Images: {{.Images}}' 2>/dev/null || true
     else
       echo "Docker is NOT running."
