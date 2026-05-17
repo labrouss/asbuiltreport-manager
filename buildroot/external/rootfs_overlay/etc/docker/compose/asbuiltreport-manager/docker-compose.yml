@@ -24,10 +24,9 @@ services:
     networks:
       - abr-net
     depends_on:
-      worker:
-        condition: service_healthy
+      - worker
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health/dependencies"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -48,15 +47,8 @@ services:
       - ps_modules:/root/.local/share/powershell/Modules
     networks:
       - abr-net
-    # PowerShell/VMware modules need more memory
     mem_limit: 4g
     mem_reservation: 2g
-    healthcheck:
-      test: ["CMD", "pwsh", "-Command", "Invoke-WebRequest -Uri http://localhost:8080/health -UseBasicParsing | Select-Object -ExpandProperty StatusCode"]
-      interval: 30s
-      timeout: 15s
-      retries: 5
-      start_period: 120s
 
 volumes:
   reports_data:
