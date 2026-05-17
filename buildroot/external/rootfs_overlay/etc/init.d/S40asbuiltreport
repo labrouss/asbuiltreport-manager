@@ -4,15 +4,31 @@
 COMPOSE_DIR="/etc/docker/compose/asbuiltreport-manager"
 PRELOAD_DIR="/var/lib/docker-preload"
 SENTINEL="/var/lib/asbuiltreport/.first-boot-done"
+SOCKET=/var/run/docker.sock
+
+wait_for_docker() {
+  local retries=30
+  while [ "$retries" -gt 0 ]; do
+    [ -S "$SOCKET" ] && return 0
+    sleep 2
+    retries=$((retries - 1))
+  done
+  echo "ERROR: Docker socket not available" >&2
+  return 1
+}
 
 case "$1" in
   start)
     echo "Starting AsBuiltReport Manager..."
 
+    mkdir -p /var/www/reports /etc/asbuiltreport /var/lib/asbuiltreport/ps-modules
+
+    # Ensure Docker is ready before doing anything
+    wait_for_docker || exit 1
+
     # ── First boot: load pre-saved images ─────────────────────────────────────
     if [ ! -f "$SENTINEL" ]; then
-      echo "First boot — loading Docker images..."
-      mkdir -p /var/www/reports /etc/asbuiltreport /var/lib/asbuiltreport/ps-modules
+      echo "First boot — loading Docker images (this may take a few minutes)..."
 
       for img in "$PRELOAD_DIR"/*.tar.gz "$PRELOAD_DIR"/*.tar; do
         [ -f "$img" ] || continue
@@ -29,9 +45,14 @@ case "$1" in
     fi
 
     # ── Start compose stack ────────────────────────────────────────────────────
-    mkdir -p /var/www/reports /etc/asbuiltreport /var/lib/asbuiltreport/ps-modules
     cd "$COMPOSE_DIR" && docker compose up -d --remove-orphans
     echo "AsBuiltReport Manager started."
+
+    # Print access info
+    IP=$(ip -4 addr show scope global | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
+    echo ""
+    echo "  Web UI: http://${IP:-<this-ip>}:3001"
+    echo ""
     ;;
 
   stop)

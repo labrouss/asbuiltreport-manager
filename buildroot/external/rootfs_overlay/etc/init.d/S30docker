@@ -1,75 +1,59 @@
 #!/bin/sh
-# /etc/init.d/S30docker — Start Docker daemon
+# /etc/init.d/S30docker
+# All dockerd configuration is in /etc/docker/daemon.json — no CLI flags needed.
 
 PIDFILE=/var/run/dockerd.pid
 LOGFILE=/var/log/dockerd.log
 SOCKET=/var/run/docker.sock
-DOCKER_OPTS="--storage-driver=overlay2 \
-  --log-driver=json-file \
-  --log-opt max-size=50m \
-  --log-opt max-file=3 \
-  --iptables=true \
-  --ip-forward=true"
 
 case "$1" in
   start)
     echo "Starting Docker..."
 
-    # Bail if already running
     if [ -S "$SOCKET" ]; then
       echo "Docker already running."
       exit 0
     fi
 
     mkdir -p /var/lib/docker /var/run/docker
-
-    # Enable IP forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-
-    # Load overlay kernel module (required for overlay2 storage driver)
     modprobe overlay 2>/dev/null || true
 
-    # Start dockerd directly in background via sh, capturing PID
-    /usr/bin/dockerd $DOCKER_OPTS >> "$LOGFILE" 2>&1 &
+    # Start dockerd — all options come from /etc/docker/daemon.json
+    /usr/bin/dockerd >> "$LOGFILE" 2>&1 &
     DOCKER_PID=$!
     echo "$DOCKER_PID" > "$PIDFILE"
 
-    # Wait up to 60s for the Unix socket to appear
     RETRIES=60
     while [ "$RETRIES" -gt 0 ]; do
       if [ -S "$SOCKET" ]; then
         echo "Docker started (pid $DOCKER_PID)."
         exit 0
       fi
-      # Check process is still alive
       if ! kill -0 "$DOCKER_PID" 2>/dev/null; then
-        echo "ERROR: dockerd exited unexpectedly. Check $LOGFILE" >&2
-        tail -5 "$LOGFILE" >&2 2>/dev/null
+        echo "ERROR: dockerd exited. Check $LOGFILE" >&2
+        tail -5 "$LOGFILE" >&2
         exit 1
       fi
       sleep 1
       RETRIES=$((RETRIES - 1))
     done
 
-    echo "ERROR: Docker socket not available after 60s. Check $LOGFILE" >&2
-    tail -10 "$LOGFILE" >&2 2>/dev/null
+    echo "ERROR: Docker socket not ready after 60s. Check $LOGFILE" >&2
+    tail -10 "$LOGFILE" >&2
     exit 1
     ;;
   stop)
     echo "Stopping Docker..."
-    if [ -f "$PIDFILE" ]; then
-      kill "$(cat $PIDFILE)" 2>/dev/null || true
-      rm -f "$PIDFILE"
-    else
-      pkill dockerd 2>/dev/null || true
-    fi
+    [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null || pkill dockerd 2>/dev/null || true
+    rm -f "$PIDFILE"
     ;;
   restart)
     "$0" stop; sleep 2; "$0" start
     ;;
   status)
     if [ -S "$SOCKET" ]; then
-      echo "Docker is running (pid $(cat $PIDFILE 2>/dev/null))."
+      echo "Docker is running."
       docker info --format 'Containers: {{.Containers}}  Images: {{.Images}}' 2>/dev/null || true
     else
       echo "Docker is NOT running."
