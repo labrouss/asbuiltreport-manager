@@ -1,12 +1,14 @@
 #!/bin/sh
 # /etc/init.d/S50ttyd — Web-based terminal on port 8443
 #
-# ttyd provides a browser-accessible shell via HTTPS on port 8443.
+# Provides browser-accessible shell login via HTTPS.
 # Access: https://<vm-ip>:8443
-# No serial port or SSH client needed — works directly in any browser.
 #
-# TLS: uses a self-signed certificate generated on first start.
-# Accept the browser's certificate warning (untrusted self-signed cert).
+# SECURITY: ttyd is only started if root has a non-empty password set.
+# On first boot the OVF property sets the password via S05ovf-init.
+# If no password was provided at deploy time, ttyd stays disabled until
+# the operator sets a password via the serial/SSH console and reboots,
+# or runs: /etc/init.d/S50ttyd start
 
 PIDFILE=/var/run/ttyd.pid
 LOGFILE=/var/log/ttyd.log
@@ -14,22 +16,34 @@ CERTFILE=/etc/ttyd/ttyd.crt
 KEYFILE=/etc/ttyd/ttyd.key
 PORT=8443
 
+root_has_password() {
+    # Check if root's password field in /etc/shadow is non-empty and not locked
+    local shadow_entry
+    shadow_entry=$(grep '^root:' /etc/shadow 2>/dev/null | cut -d: -f2)
+    # Empty, '*', or '!' means no usable password
+    case "$shadow_entry" in
+        ''|'*'|'!'|'!!'|'!*') return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 generate_cert() {
     mkdir -p /etc/ttyd
-    if [ ! -f "$CERTFILE" ] || [ ! -f "$KEYFILE" ]; then
-        echo "Generating ttyd TLS certificate..."
-        openssl req -x509 -newkey rsa:2048 -keyout "$KEYFILE" -out "$CERTFILE" \
-            -days 3650 -nodes \
-            -subj "/CN=asbuiltreport-manager/O=AsBuiltReport/C=AU" \
-            2>/dev/null \
-            && echo "TLS certificate generated." \
-            || echo "WARNING: openssl not available — ttyd will run without TLS"
-    fi
+    [ -f "$CERTFILE" ] && [ -f "$KEYFILE" ] && return 0
+    echo "Generating ttyd TLS certificate..."
+    openssl req -x509 -newkey rsa:2048 \
+        -keyout "$KEYFILE" -out "$CERTFILE" \
+        -days 3650 -nodes \
+        -subj "/CN=asbuiltreport-manager/O=AsBuiltReport/C=AU" \
+        2>/dev/null && chmod 600 "$KEYFILE"
 }
 
 case "$1" in
   start)
-    echo -n "Starting ttyd (web terminal on :${PORT})... "
+    if ! root_has_password; then
+        echo "ttyd: skipping — root has no password set (set one first with 'passwd')"
+        exit 0
+    fi
 
     generate_cert
 
@@ -38,9 +52,9 @@ case "$1" in
     else
         TLS_OPTS=""
         PORT=8080
-        echo -n "(no TLS, port 8080) "
     fi
 
+    echo -n "Starting ttyd (web terminal on :${PORT})... "
     start-stop-daemon --start --quiet --background \
         --pidfile "$PIDFILE" --make-pidfile \
         --exec /usr/bin/ttyd -- \
@@ -49,27 +63,34 @@ case "$1" in
             --once=false \
             --max-clients=5 \
             $TLS_OPTS \
-            /bin/sh -l \
+            /bin/login \
         >> "$LOGFILE" 2>&1
-
     echo "OK"
     ;;
+
   stop)
     echo -n "Stopping ttyd... "
     start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
     rm -f "$PIDFILE"
     echo "OK"
     ;;
+
   restart)
     "$0" stop; sleep 1; "$0" start
     ;;
+
   status)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
         echo "ttyd is running (pid $(cat $PIDFILE)) on port $PORT"
     else
-        echo "ttyd is not running"
+        if root_has_password; then
+            echo "ttyd is stopped"
+        else
+            echo "ttyd is disabled (root has no password — run 'passwd' then restart ttyd)"
+        fi
     fi
     ;;
+
   *)
     echo "Usage: $0 {start|stop|restart|status}"
     exit 1

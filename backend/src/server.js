@@ -94,6 +94,8 @@ const KNOWN_MODULES = [
   { id: 'Aruba.ClearPass',        name: 'Aruba ClearPass',            category: 'Networking', icon: '📡', version: '0.1.1',       description: 'ClearPass policy manager, endpoints, services and auth sources.' },
   // ── DR / Replication ───────────────────────────────────────────────────────
   { id: 'Zerto.ZVM',             name: 'Zerto ZVM',                  category: 'DR',         icon: '♻️', version: '0.1.0-RC1',   description: 'Zerto ZVM virtual protection groups, VRAs, journals and failover plans.' },
+  // ── VMware extras ─────────────────────────────────────────────────────────
+  { id: 'VMware.RVTools', name: 'VMware RVTools Export', category: 'VMware', icon: '📊', version: '2.0', description: '27-tab RVTools replica — exports vInfo, vCPU, vMemory, vDisk, vNetwork, vHost, vCluster and more to Excel.' },
   // ── HPE ───────────────────────────────────────────────────────────────────
   { id: 'HPE.OneView',           name: 'HPE OneView',                category: 'Compute',    icon: '🟢', version: '10.00',       description: 'Server hardware, profiles, networks, enclosures and firmware via HPE OneView appliance.' },
   // ── System ─────────────────────────────────────────────────────────────────

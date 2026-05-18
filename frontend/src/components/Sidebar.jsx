@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, LayoutDashboard, Settings2, Terminal, FolderOpen, Clock, Users, Wifi, WifiOff, Zap, LogOut } from 'lucide-react';
+import { Home, LayoutDashboard, Settings2, Terminal, FolderOpen, Clock, Users, Wifi, WifiOff, Zap, LogOut, TerminalSquare } from 'lucide-react';
 
 const NAV = [
   { id: 'home',      label: 'Dashboard', Icon: Home },
@@ -11,7 +11,7 @@ const NAV = [
   { id: 'users',     label: 'Users',     Icon: Users },
 ];
 
-export default function Sidebar({ page, setPage, wsReady, user, onLogout }) {
+export default function Sidebar({ page, setPage, wsReady, user, onLogout, activeJob }) {
   return (
     <aside className="w-16 flex flex-col items-center py-4 gap-1 border-r border-abr-border bg-abr-surface shrink-0">
       <div className="mb-6 flex items-center justify-center w-9 h-9 rounded-lg bg-abr-accent/10 border border-abr-accent/30">
@@ -39,6 +39,15 @@ export default function Sidebar({ page, setPage, wsReady, user, onLogout }) {
         <div title={wsReady ? 'Live' : 'Disconnected'}>
           {wsReady ? <Wifi size={13} className="text-abr-success" /> : <WifiOff size={13} className="text-abr-sub" />}
         </div>
+        {/* ttyd terminal */}
+        <a href={`${window.location.protocol}//${window.location.hostname}:8443`}
+          target="_blank" rel="noreferrer" title="Open Terminal (ttyd :8443)"
+          className="p-1.5 text-abr-sub hover:text-abr-accent rounded-lg transition-colors group relative">
+          <TerminalSquare size={14} />
+          <span className="absolute left-10 hidden group-hover:block text-xs bg-abr-muted border border-abr-border text-abr-text px-2 py-1 rounded whitespace-nowrap z-50 pointer-events-none">
+            Terminal (ttyd)
+          </span>
+        </a>
         {/* Logout */}
         <button onClick={onLogout} title="Sign out"
           className="p-1.5 text-abr-sub hover:text-abr-danger rounded-lg transition-colors">

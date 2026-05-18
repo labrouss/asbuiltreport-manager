@@ -24,6 +24,7 @@ export default function App() {
   const [wsReady, setWsReady]       = useState(false);
   const [logLines, setLogLines]     = useState([]);
   const [activeJob, setActiveJob]   = useState(null);
+  const [runToast, setRunToast]     = useState(null);
 
   // Auth is handled per-component via apiFetch() from api.js
 
@@ -38,7 +39,7 @@ export default function App() {
         const msg = JSON.parse(e.data);
         if (msg.type === 'report:stdout' || msg.type === 'report:stderr')
           setLogLines(p => [...p, { text: msg.payload.line, type: msg.type === 'report:stderr' ? 'err' : 'info' }]);
-        if (msg.type === 'report:start') { setActiveJob(msg.payload.jobId); setPage('console'); }
+        if (msg.type === 'report:start') { setActiveJob(msg.payload.jobId); } // no forced nav — user stays on current page
         if (msg.type === 'report:done')  { setActiveJob(null); }
         if (msg.type === 'install:stdout') setLogLines(p => [...p, { text: msg.payload.line, type: 'info' }]);
       } catch (_) {}
@@ -78,12 +79,28 @@ export default function App() {
   const handleRunReport = (params) => {
     setLogLines([]);
     apiFetch('/api/reports/run', { method: 'POST', body: JSON.stringify(params) });
-    setPage('console');
+    // Don't force navigate — show a toast instead so user can keep working
+    setRunToast({ moduleId: params.moduleId, target: params.target });
+    setTimeout(() => setRunToast(null), 4000);
   };
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-abr-bg noise-bg">
-      <Sidebar page={page} setPage={setPage} wsReady={wsReady} user={user} onLogout={handleLogout} />
+      <Sidebar page={page} setPage={setPage} wsReady={wsReady} user={user} onLogout={handleLogout} activeJob={activeJob} />
+      {/* Non-blocking run notification */}
+      {runToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-abr-surface border border-abr-accent/30 rounded-xl px-4 py-3 shadow-2xl animate-slide-up">
+          <div className="w-2 h-2 rounded-full bg-abr-accent animate-pulse" />
+          <div>
+            <p className="text-xs font-medium text-abr-text">Report started</p>
+            <p className="text-xs text-abr-sub">{runToast.moduleId} → {runToast.target}</p>
+          </div>
+          <button onClick={() => { setRunToast(null); setPage('console'); }}
+            className="text-xs text-abr-accent hover:text-blue-300 ml-2 transition-colors">
+            View →
+          </button>
+        </div>
+      )}
       <main className="flex-1 overflow-hidden">
         {page === 'home'      && <MainDashboard onNavigate={navigate} user={user} />}
         {page === 'dashboard' && <ModuleDashboard onSelect={handleModuleSelect} />}

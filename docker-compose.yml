@@ -1,12 +1,9 @@
-name: asbuiltreport-manager
-
 services:
-  # ── Frontend / API ──────────────────────────────────────────────────────────
+  # ── Frontend / API ─────────────────────────────────────────────────────────
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: asbuiltreport-app:latest       # explicit tag — stable name for docker save/load
     container_name: asbuiltreport-app
     restart: unless-stopped
     ports:
@@ -36,7 +33,6 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile
-    image: asbuiltreport-worker:latest    # explicit tag — stable name for docker save/load
     container_name: asbuiltreport-worker
     restart: unless-stopped
     expose:

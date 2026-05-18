@@ -52,6 +52,10 @@ EOF
     if [ ! -f "$SENTINEL" ]; then
       if [ -n "$PASSWORD" ]; then
         echo "root:$PASSWORD" | chpasswd
+        # Force password change on first console/SSH login
+        chage -d 0 root 2>/dev/null || passwd -e root 2>/dev/null || true
+        # Start ttyd now that a password is set
+        /etc/init.d/S50ttyd start 2>/dev/null || true
       fi
       if [ -n "$SSH_KEY" ]; then
         mkdir -p /root/.ssh

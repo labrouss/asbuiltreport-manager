@@ -88,6 +88,11 @@ while ($Listener.IsListening) {
                     $ModuleList += 'HPE.OneView'
                     $Versions['HPE.OneView'] = 'custom'
                 }
+                # RVTools replica script
+                if (Test-Path '/app/reports/Get-RVToolsReport.ps1') {
+                    $ModuleList += 'VMware.RVTools'
+                    $Versions['VMware.RVTools'] = 'v2.0'
+                }
                 # Force $ModuleList to always serialize as JSON array, even if 0 or 1 element
                 Send-Json $Context @{ modules = [array]$ModuleList; versions = $Versions }
             }
@@ -96,8 +101,20 @@ while ($Listener.IsListening) {
                 $Payload  = Read-Body $Context
                 $ModuleId = $Payload.moduleId
 
-                # HPE OneView uses its own versioned library — no AsBuiltReport wrapper exists
-                if ($ModuleId -eq 'HPE.OneView') {
+                # Custom scripts — no PSGallery install needed
+                if ($ModuleId -eq 'HPE.OneView' -or $ModuleId -eq 'VMware.RVTools') {
+                    Send-Stream $Context {
+                        param($Writer)
+                        $scriptMap = @{ 'HPE.OneView' = 'Invoke-HPEOneViewReport.ps1'; 'VMware.RVTools' = 'Get-RVToolsReport.ps1' }
+                        $scriptFile = "/app/reports/$($scriptMap[$ModuleId])"
+                        if (Test-Path $scriptFile) {
+                            $Writer.WriteLine("$ModuleId uses a custom built-in script — no install needed.")
+                            $Writer.WriteLine("SUCCESS: $ModuleId is ready to use.")
+                        } else {
+                            $Writer.WriteLine("ERROR: Script not found at $scriptFile")
+                        }
+                    }
+                } elseif ($false) { # placeholder to maintain elseif chain
                     Send-Stream $Context {
                         param($Writer)
                         $Writer.WriteLine("HPE OneView uses the HPEOneView.{version} library directly.")
@@ -232,10 +249,33 @@ while ($Listener.IsListening) {
                         $CoreConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $BaseConfigFile -Encoding UTF8
                         $Writer.WriteLine("VERBOSE: Wrote AsBuiltReport config to $BaseConfigFile")
 
+                        # RVTools replica — custom Excel export script
+                        if ($ModuleId -eq 'VMware.RVTools') {
+                            $Script = '/app/reports/Get-RVToolsReport.ps1'
+                            $Writer.WriteLine("VERBOSE: Using RVTools replica script")
+                            # Ensure ImportExcel is available
+                            if (-not (Get-Module -ListAvailable -Name 'ImportExcel' -ErrorAction SilentlyContinue)) {
+                                $Writer.WriteLine("VERBOSE: Installing ImportExcel module...")
+                                Install-Module -Name ImportExcel -Repository PSGallery -Force -Scope AllUsers -AcceptLicense
+                            }
+                            $PwshArgs = @(
+                                '-NonInteractive'
+                                '-NoProfile'
+                                '-File', $Script
+                                '-VCenterServer', $Target
+                                '-Username', $Username
+                                '-Password', $Password
+                                '-ExportExcel'
+                                '-ExportPath', $OutputPath
+                            )
+                            & pwsh @PwshArgs *>&1 | ForEach-Object { $Writer.WriteLine($_.ToString()) }
+                            # Mark done — find the generated xlsx
+                            $Writer.WriteLine("::DONE::$JobId")
+
                         # HPE OneView uses a custom script (no AsBuiltReport module available)
                         # IMPORTANT: Must run in a child pwsh process to avoid .NET assembly
                         # conflicts when HPEOneView module is loaded multiple times in same session
-                        if ($ModuleId -eq 'HPE.OneView') {
+                        } elseif ($ModuleId -eq 'HPE.OneView') {
                             $Script = '/app/reports/Invoke-HPEOneViewReport.ps1'
                             $Writer.WriteLine("VERBOSE: Using custom HPE OneView report script (isolated process)")
                             $PwshArgs = @(

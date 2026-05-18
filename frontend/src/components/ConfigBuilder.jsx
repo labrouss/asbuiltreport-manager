@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Save, Play, Eye, EyeOff, ChevronDown, ChevronRight, Loader, CheckCircle, Clock, X } from 'lucide-react';
 // Auth fetch helper
 function apiFetch(url, opts = {}) {
   const token = localStorage.getItem('abr_token');
   return fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) } });
 }
-import { ArrowLeft, Save, Play, Eye, EyeOff, ChevronDown, ChevronRight, Loader, CheckCircle } from 'lucide-react';
 
 // ── Field Renderer ─────────────────────────────────────────────────────────────
 function Field({ label, value, onChange, type = 'text', options, hint }) {
@@ -79,6 +79,81 @@ function Section({ title, children, defaultOpen = true }) {
 }
 
 // ── Main Config Builder ────────────────────────────────────────────────────────
+
+// ── Quick Schedule Form (inline in ConfigBuilder) ────────────────────────────
+function QuickScheduleForm({ moduleId, target, creds, formats, onSave, onClose }) {
+  const [frequency, setFrequency] = useState('daily');
+  const [time, setTime]           = useState('06:00');
+  const [dayOfWeek, setDayOfWeek] = useState(1);
+  const [dayOfMonth, setDayOfMonth] = useState(1);
+  const [label, setLabel]         = useState('');
+  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const inp = "w-full bg-abr-bg border border-abr-border rounded-lg px-3 py-2 text-xs font-mono text-abr-text focus:outline-none focus:border-abr-accent";
+
+  const save = () => {
+    onSave({
+      moduleId, target: target.trim(),
+      label: label || `${moduleId} — ${target}`,
+      credentials: creds,
+      options: { formats },
+      frequency, time, dayOfWeek, dayOfMonth, minute: 0,
+    });
+  };
+
+  return (
+    <div className="p-5 space-y-4">
+      <div>
+        <label className="block text-xs text-abr-sub mb-1.5">Label (optional)</label>
+        <input className={inp} value={label} onChange={e => setLabel(e.target.value)} placeholder={`${moduleId} — ${target}`} />
+      </div>
+      <div>
+        <label className="block text-xs text-abr-sub mb-1.5">Frequency</label>
+        <div className="flex gap-2 flex-wrap">
+          {['hourly','daily','weekly','monthly'].map(f => (
+            <button key={f} onClick={() => setFrequency(f)}
+              className={`px-3 py-1.5 rounded-lg text-xs border capitalize transition-all ${frequency === f ? 'bg-abr-accent/15 text-abr-accent border-abr-accent/30' : 'bg-abr-bg text-abr-sub border-abr-border hover:border-abr-muted'}`}>
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+      {frequency !== 'hourly' && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-abr-sub mb-1.5">Time</label>
+            <input className={inp} type="time" value={time} onChange={e => setTime(e.target.value)} />
+          </div>
+          {frequency === 'weekly' && (
+            <div>
+              <label className="block text-xs text-abr-sub mb-1.5">Day</label>
+              <select className={inp + ' cursor-pointer'} value={dayOfWeek} onChange={e => setDayOfWeek(+e.target.value)}>
+                {DAYS.map((d,i) => <option key={i} value={i}>{d}</option>)}
+              </select>
+            </div>
+          )}
+          {frequency === 'monthly' && (
+            <div>
+              <label className="block text-xs text-abr-sub mb-1.5">Day of month</label>
+              <input className={inp} type="number" min="1" max="28" value={dayOfMonth} onChange={e => setDayOfMonth(+e.target.value)} />
+            </div>
+          )}
+        </div>
+      )}
+      <div className="p-3 bg-abr-muted/50 rounded-lg text-xs text-abr-sub space-y-1">
+        <div className="flex justify-between"><span>Module</span><span className="text-abr-text font-mono">{moduleId}</span></div>
+        <div className="flex justify-between"><span>Target</span><span className="text-abr-text font-mono">{target}</span></div>
+        <div className="flex justify-between"><span>Formats</span><span className="text-abr-text">{formats.join(', ')}</span></div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-abr-border text-abr-sub text-xs hover:text-abr-text transition-all">Cancel</button>
+        <button onClick={save} className="flex-1 py-2 rounded-lg bg-abr-accent text-white text-xs hover:bg-blue-400 transition-all flex items-center justify-center gap-1.5">
+          <Clock size={11} /> Save Schedule
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ConfigBuilder({ module: mod, onRun, onBack }) {
   const [config, setConfig] = useState(null);
   const [target, setTarget] = useState('');
@@ -88,7 +163,8 @@ export default function ConfigBuilder({ module: mod, onRun, onBack }) {
   useEffect(() => { setTarget(''); setCreds({ username: '', password: '' }); }, [mod?.id]);
   const [formats, setFormats] = useState(['HTML']);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved]   = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
 
   useEffect(() => {
     if (!mod) return;
@@ -119,8 +195,9 @@ export default function ConfigBuilder({ module: mod, onRun, onBack }) {
 
   const run = () => {
     save();
-    // Trim target to avoid doubled values from autofill
-    onRun({ moduleId: mod.id, target: target.trim(), credentials: creds, options: { formats } });
+    // RVTools always outputs Excel; other modules use selected formats
+    const runFormats = mod.id === 'VMware.RVTools' ? ['Excel'] : formats;
+    onRun({ moduleId: mod.id, target: target.trim(), credentials: creds, options: { formats: runFormats } });
   };
 
   const toggleFormat = (f) => setFormats((prev) => prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]);
@@ -137,8 +214,29 @@ export default function ConfigBuilder({ module: mod, onRun, onBack }) {
     </div>
   );
 
+  const saveSchedule = (schedData) => {
+    apiFetch('/api/schedules', { method: 'POST', body: JSON.stringify(schedData) })
+      .then(() => { setShowSchedule(false); setSaved(true); setTimeout(() => setSaved(false), 2000); });
+  };
+
   return (
     <div className="h-full flex flex-col">
+      {/* Quick Schedule Modal */}
+      {showSchedule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-abr-surface border border-abr-border rounded-xl w-full max-w-sm shadow-2xl animate-slide-up">
+            <div className="px-5 py-4 border-b border-abr-border flex items-center gap-2">
+              <Clock size={15} className="text-abr-accent" />
+              <h2 className="text-sm font-semibold text-abr-text">Schedule This Report</h2>
+              <button onClick={() => setShowSchedule(false)} className="ml-auto text-abr-sub hover:text-abr-text text-xl leading-none">×</button>
+            </div>
+            <QuickScheduleForm
+              moduleId={mod.id} target={target} creds={creds} formats={formats}
+              onSave={saveSchedule} onClose={() => setShowSchedule(false)}
+            />
+          </div>
+        </div>
+      )}
       {/* Top Bar */}
       <div className="px-6 py-4 border-b border-abr-border flex items-center gap-4">
         <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-abr-sub hover:text-abr-text transition-colors">
@@ -156,9 +254,13 @@ export default function ConfigBuilder({ module: mod, onRun, onBack }) {
             {saving ? <Loader size={12} className="animate-spin" /> : saved ? <CheckCircle size={12} className="text-abr-success" /> : <Save size={12} />}
             {saved ? 'Saved!' : 'Save Config'}
           </button>
+          <button onClick={() => { save(); setShowSchedule(true); }} disabled={!target || !creds.username || !creds.password}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-abr-border text-abr-sub hover:text-abr-accent hover:border-abr-accent/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+            <Clock size={12} /> Schedule
+          </button>
           <button onClick={run} disabled={!target || !creds.username || !creds.password}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs bg-abr-accent text-white hover:bg-blue-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
-            <Play size={12} /> Run Report
+            <Play size={12} /> Run Now
           </button>
         </div>
       </div>
@@ -201,18 +303,26 @@ export default function ConfigBuilder({ module: mod, onRun, onBack }) {
 
         {/* Output Formats */}
         <Section title="Output Formats">
-          <div className="col-span-2 flex gap-3">
-            {['HTML', 'Word', 'XML', 'Text'].map((f) => (
-              <button key={f} onClick={() => toggleFormat(f)}
-                className={`px-4 py-2 rounded-lg text-xs font-medium border transition-all ${
-                  formats.includes(f)
-                    ? 'bg-abr-accent/15 text-abr-accent border-abr-accent/30'
-                    : 'bg-abr-surface text-abr-sub border-abr-border hover:border-abr-muted'
-                }`}>
-                {f}
-              </button>
-            ))}
-          </div>
+          {mod.id === 'VMware.RVTools' && (
+            <div className="col-span-2 flex items-center gap-2 p-3 bg-abr-accent/5 border border-abr-accent/20 rounded-lg text-xs text-abr-text">
+              <span>📊</span>
+              <span>RVTools export always generates a <strong>.xlsx</strong> file with 27 tabs — format selector does not apply.</span>
+            </div>
+          )}
+          {mod.id !== 'VMware.RVTools' && (
+            <div className="col-span-2 flex gap-3">
+              {['HTML', 'Word', 'XML', 'Text'].map((f) => (
+                <button key={f} onClick={() => toggleFormat(f)}
+                  className={`px-4 py-2 rounded-lg text-xs font-medium border transition-all ${
+                    formats.includes(f)
+                      ? 'bg-abr-accent/15 text-abr-accent border-abr-accent/30'
+                      : 'bg-abr-surface text-abr-sub border-abr-border hover:border-abr-muted'
+                  }`}>
+                  {f}
+                </button>
+              ))}
+            </div>
+          )}
         </Section>
 
         {/* Raw JSON Preview */}

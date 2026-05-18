@@ -61,34 +61,41 @@ GRUB_MODDIR="${GRUB_BUILD_DIR}/build-x86_64-efi/grub-core"
 GRUB_MKSTANDALONE="${BUILD_DIR}/../host/bin/grub-mkstandalone"
 [ -f "${GRUB_MKSTANDALONE}" ] || die "grub-mkstandalone not found at ${GRUB_MKSTANDALONE}"
 
-GRUB_CFG_SRC="${SCRIPT_DIR}/grub.cfg"
-[ -f "${GRUB_CFG_SRC}" ] || die "grub.cfg not found at ${GRUB_CFG_SRC}"
+GRUB_CFG_EMBEDDED="${SCRIPT_DIR}/grub-embedded.cfg"
+GRUB_CFG_EXTERNAL="${SCRIPT_DIR}/grub.cfg"
+[ -f "${GRUB_CFG_EMBEDDED}" ] || die "grub-embedded.cfg not found at ${GRUB_CFG_EMBEDDED}"
+[ -f "${GRUB_CFG_EXTERNAL}" ] || die "grub.cfg not found at ${GRUB_CFG_EXTERNAL}"
 
 EFI_BOOT_DIR="${BINARIES_DIR}/efi-part/EFI/BOOT"
 mkdir -p "${EFI_BOOT_DIR}"
 
 log "Building bootx64.efi with grub-mkstandalone..."
-log "  Module dir: ${GRUB_MODDIR}"
-log "  grub.cfg:   ${GRUB_CFG_SRC}"
+log "  Module dir:      ${GRUB_MODDIR}"
+log "  Embedded config: ${GRUB_CFG_EMBEDDED}"
+log "  External config: ${GRUB_CFG_EXTERNAL}"
 
+# The embedded config is minimal — it just sets root=(hd0,gpt1) and sources
+# the real grub.cfg from the EFI FAT partition. This keeps bootx64.efi simple
+# and makes boot parameters fully editable post-deployment.
+#
+# Module set matches san-manager reference: includes all_video + font + gfxterm
+# for VGA console output in VMware VMRC.
 "${GRUB_MKSTANDALONE}" \
     --format=x86_64-efi \
     --directory="${GRUB_MODDIR}" \
     --modules="boot linux part_gpt part_msdos fat ext2 normal echo configfile \
                search search_fs_uuid search_fs_file search_label ls cat \
-               reboot halt serial" \
+               reboot halt serial terminfo all_video font gfxterm" \
     --output="${EFI_BOOT_DIR}/bootx64.efi" \
-    "boot/grub/grub.cfg=${GRUB_CFG_SRC}"
+    "boot/grub/grub.cfg=${GRUB_CFG_EMBEDDED}"
 
 EFI_SIZE=$(stat -c '%s' "${EFI_BOOT_DIR}/bootx64.efi")
 log "bootx64.efi: $(numfmt --to=iec "${EFI_SIZE}") — should be several MB, not ~608KB"
 
-# Also place grub.cfg on the EFI FAT partition as a plain editable file.
-# The embedded config chain-loads this via 'source', so operators can edit
-# boot parameters post-deployment without rebuilding the OVA:
-#   mount /dev/sda1 /boot/efi && vi /boot/efi/EFI/BOOT/grub.cfg
-cp "${GRUB_CFG_SRC}" "${EFI_BOOT_DIR}/grub.cfg"
-log "grub.cfg copied to EFI partition (editable at /boot/efi/EFI/BOOT/grub.cfg)"
+# Place the real (editable) grub.cfg on the EFI FAT partition.
+# Post-deployment: mount /dev/sda1 /boot/efi && vi /boot/efi/EFI/BOOT/grub.cfg
+cp "${GRUB_CFG_EXTERNAL}" "${EFI_BOOT_DIR}/grub.cfg"
+log "grub.cfg placed on EFI partition (editable at /boot/efi/EFI/BOOT/grub.cfg)"
 
 # Verify the linux command is present in the binary
 if strings "${EFI_BOOT_DIR}/bootx64.efi" | grep -q "^linux$"; then

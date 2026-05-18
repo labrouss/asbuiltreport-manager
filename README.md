@@ -1,17 +1,10 @@
 # AsBuiltReport Manager
 
-Enterprise-grade web GUI for managing, configuring, executing and scheduling [AsBuiltReport](https://www.asbuiltreport.com/) PowerShell modules.
-
-Two deployment modes are supported from the same repository:
-
-| Mode | How | Best for |
-|------|-----|----------|
-| **Docker** | Clone repo, run `sudo bash setup.sh` | Linux servers, home labs, CI runners |
-| **VMware OVA** | Download `.ova`, deploy to vCenter/ESXi | Production, air-gapped, enterprise |
+Enterprise-grade web GUI for managing, configuring, executing and scheduling [AsBuiltReport](https://www.asbuiltreport.com/) PowerShell modules — deployed as two Docker containers on a Linux host.
 
 ---
 
-## Docker Mode — Quick Start
+## Quick Start
 
 ```bash
 git clone <repo> asbuiltreport-manager
@@ -21,26 +14,8 @@ sudo bash setup.sh
 
 Open **http://\<host-ip\>:3001**
 
-**Default credentials:** `admin` / `Admin@AsBuilt1!`
+**Default credentials:** `admin` / `Admin@AsBuilt1!`  
 You will be forced to change the password on first login.
-
----
-
-## VMware OVA Appliance — Quick Start
-
-1. Download the latest `.ova` from the [Releases](../../releases) page
-2. In vCenter: **Actions → Deploy OVF Template**, select the `.ova`
-3. Fill in the OVF properties at deploy time:
-   - **Hostname** (e.g. `abr.company.local`)
-   - **IP Address** in CIDR notation (e.g. `192.168.1.50/24`) — leave blank for DHCP
-   - **Gateway** and **DNS servers**
-   - **Root password**
-4. Power on — the stack starts automatically in ~2 minutes
-5. Open **http://\<vm-ip\>:3001**
-
-**VM specs:** 4 vCPU · 8 GB RAM · 40 GB disk · VMXNET3
-
-> The OVA is built with Buildroot. Both Docker images are baked in — no internet required after deployment.
 
 ---
 
@@ -140,23 +115,6 @@ docker logs -f asbuiltreport-worker
 docker exec -it asbuiltreport-worker pwsh
 ```
 
-### Makefile shortcuts
-
-```bash
-make up              # docker compose up -d (creates host dirs first)
-make down            # docker compose down
-make rebuild         # --no-cache rebuild of all images, then up
-make rebuild-app     # rebuild app image only, then up app
-make rebuild-worker  # rebuild worker image only, then up worker
-make deploy-backend  # hot-copy backend/src/* and restart app
-make deploy-worker   # hot-copy worker/*.ps1 and restart worker
-make logs            # tail all logs
-make shell-app       # sh into app container
-make shell-worker    # pwsh into worker container
-make status          # container health + recent app logs
-make reset           # ⚠ wipe all data and start fresh
-```
-
 ---
 
 ## Persistent Volumes
@@ -168,67 +126,6 @@ make reset           # ⚠ wipe all data and start fresh
 | `/var/lib/asbuiltreport/ps-modules` | Cached PowerShell modules |
 
 All data survives container restarts and rebuilds.
-
----
-
-## OVA Build (from source)
-
-The OVA is built with [Buildroot](https://buildroot.org). The `buildroot/` directory
-contains a `BR2_EXTERNAL` tree with defconfig, rootfs overlay, systemd units,
-first-boot scripts, and the OVF descriptor template.
-
-### Prerequisites (Ubuntu 22.04)
-
-```bash
-sudo apt-get install -y \
-    build-essential git curl python3 \
-    libncurses-dev bison flex gawk \
-    cpio rsync bc file unzip \
-    qemu-utils mtools dosfstools e2fsprogs
-
-# genimage — not in Ubuntu apt, build from source:
-sudo apt-get install -y autoconf automake libtool pkg-config libconfuse-dev
-git clone --depth=1 https://github.com/pengutronix/genimage.git
-cd genimage && ./autogen.sh && ./configure && make -j$(nproc) && sudo make install
-```
-
-### Build steps
-
-```bash
-# 1. Save Docker images as tarballs (baked into the OVA)
-make prepare-images       # both images (~40 min first run, cached after)
-# or individually:
-make prepare-app          # ~2 min
-make prepare-worker       # ~40 min
-
-# 2. Configure Buildroot (downloads Buildroot source automatically)
-make defconfig
-
-# 3. Build the OVA
-make ova-build            # ~1-2 hours → output/images/asbuiltreport-manager-v*.ova
-```
-
-### OVA first-boot sequence
-
-```
-systemd starts
-  ├── asbuiltreport-ovf-init   reads guestinfo.* → sets hostname + network + password
-  ├── docker + containerd
-  ├── asbuiltreport-first-boot  docker load *.tar.gz → docker compose up -d  (once only)
-  ├── asbuiltreport-manager     keeps compose up on every subsequent boot
-  └── asbuiltreport-console     whiptail management TUI on tty1
-```
-
-### OVF properties (set at deploy time in vCenter)
-
-| Property | Key | Default |
-|----------|-----|---------|
-| Hostname | `guestinfo.hostname` | `asbuiltreport-manager` |
-| IP Address (CIDR) | `guestinfo.ipaddress` | *(blank = DHCP)* |
-| Default Gateway | `guestinfo.gateway` | *(blank)* |
-| DNS Servers | `guestinfo.dns` | `8.8.8.8 8.8.4.4` |
-| Root Password | `guestinfo.password` | *(blank = key-only)* |
-| SSH Authorised Key | `guestinfo.ssh_authorized_key` | *(blank)* |
 
 ---
 
