@@ -1,28 +1,52 @@
 #!/bin/sh
-# /etc/init.d/S30cgroupfs — Mount cgroup2 unified hierarchy
-# Must run before S30docker (alphabetical: cgroupfs < docker).
+# /etc/init.d/S30cgroupfs — Mount cgroup v1 hierarchy
+#
+# Docker 26 / containerd 1.7 / runc with this kernel requires cgroup v1.
+# We explicitly mount the cgroup v1 tmpfs + individual controllers.
+# If the kernel already mounted cgroup2, we unmount it first.
 
 case "$1" in
   start)
-    if mountpoint -q /sys/fs/cgroup 2>/dev/null; then
-      echo "Mounting cgroupfs hierarchy: already mounted"
-      exit 0
-    fi
-
     echo -n "Mounting cgroupfs hierarchy: "
 
-    # cgroup2 unified hierarchy (required by modern containerd/runc)
-    if mount -t cgroup2 cgroup2 /sys/fs/cgroup; then
-      echo "OK"
+    # Unmount cgroup2 if the kernel auto-mounted it
+    if mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+      CGTYPE=$(awk '$2=="/sys/fs/cgroup"{print $3; exit}' /proc/mounts)
+      if [ "$CGTYPE" = "cgroup2" ]; then
+        umount /sys/fs/cgroup 2>/dev/null || true
+      elif [ "$CGTYPE" = "tmpfs" ]; then
+        # Already a v1 tmpfs base — check if controllers are present
+        if grep -q "^cgroup /sys/fs/cgroup/devices" /proc/mounts 2>/dev/null; then
+          echo "already mounted"
+          exit 0
+        fi
+        # tmpfs is there but controllers missing — unmount and redo
+        # First unmount any existing controllers
+        for d in /sys/fs/cgroup/*/; do
+          mountpoint -q "$d" && umount "$d" 2>/dev/null || true
+        done
+        umount /sys/fs/cgroup 2>/dev/null || true
+      fi
+    fi
+
+    # Mount tmpfs base
+    mount -t tmpfs tmpfs /sys/fs/cgroup -o mode=755,size=64m || {
+      echo "FAIL"
+      exit 1
+    }
+
+    # Mount each cgroup v1 controller
+    FAILED=""
+    for subsys in cpu cpuacct cpuset memory blkio devices freezer net_cls pids; do
+      mkdir -p "/sys/fs/cgroup/${subsys}"
+      mount -t cgroup cgroup "/sys/fs/cgroup/${subsys}" -o "${subsys}" 2>/dev/null \
+        || FAILED="${FAILED} ${subsys}"
+    done
+
+    if [ -n "$FAILED" ]; then
+      echo "OK (missing kernel support for:${FAILED})"
     else
-      # cgroup v1 fallback — mount each controller individually
-      mount -t tmpfs tmpfs /sys/fs/cgroup -o mode=755,size=64m || \
-        { echo "FAIL"; exit 1; }
-      for subsys in cpu cpuacct cpuset memory blkio devices freezer net_cls pids; do
-        mkdir -p "/sys/fs/cgroup/${subsys}"
-        mount -t cgroup cgroup "/sys/fs/cgroup/${subsys}" -o "${subsys}" 2>/dev/null || true
-      done
-      echo "OK (cgroup v1)"
+      echo "OK"
     fi
     ;;
   stop|restart) ;;
