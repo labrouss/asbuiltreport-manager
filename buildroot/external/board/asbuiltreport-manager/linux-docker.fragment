@@ -101,3 +101,21 @@ CONFIG_SCSI_PVSCSI=y
 CONFIG_EFI=y
 CONFIG_EFI_STUB=y
 CONFIG_EFI_MIXED=y
+
+# ── EFI Framebuffer console (required for VGA output in VMware VMRC) ─────────
+# Without these the screen goes blank after GRUB hands off to the kernel.
+# EFI hands the framebuffer to the kernel; CONFIG_FB_EFI makes the kernel
+# use it as a console device visible in VMware's web/remote console.
+CONFIG_FB=y
+CONFIG_FB_EFI=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_DUMMY_CONSOLE=y
+CONFIG_VGA_CONSOLE=y
+# VMware SVGA driver (optional — FB_EFI works without it but SVGA gives
+# proper resolution negotiation with VMware's virtual GPU)
+CONFIG_DRM=y
+CONFIG_DRM_VMWGFX=y
+CONFIG_DRM_FBDEV_EMULATION=y

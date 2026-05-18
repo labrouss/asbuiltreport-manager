@@ -7,7 +7,7 @@
 # is confirmed working on Buildroot 2024.02.9.
 #
 # Key decisions matching san-manager exactly:
-#   - BR2_TOOLCHAIN_BUILDROOT_MUSL=y  (explicit musl selection)
+#   - BR2_TOOLCHAIN_BUILDROOT_GLIBC=y  (explicit musl selection)
 #   - BR2_GCC_VERSION_13_X + BR2_BINUTILS_VERSION_2_41_X (pinned toolchain)
 #   - BR2_LINUX_KERNEL_CUSTOM_VERSION pinned to 6.6.63 (same as san-manager)
 #   - BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES for Docker kernel options
@@ -25,7 +25,7 @@ BR2_x86_64=y
 BR2_TARGET_OPTIMIZATION="-O2 -pipe -march=x86-64-v2"
 
 # ── Toolchain ────────────────────────────────────────────────────────────────
-BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_GCC_VERSION_13_X=y
 BR2_BINUTILS_VERSION_2_41_X=y
@@ -112,7 +112,6 @@ BR2_CCACHE=y
 # ── VMware guest tools ────────────────────────────────────────────────────────
 BR2_PACKAGE_OPEN_VM_TOOLS=y
 BR2_PACKAGE_OPEN_VM_TOOLS_SCRIPTS=y
-BR2_PACKAGE_LIBGLIB2=y
 BR2_PACKAGE_UTIL_LINUX_LIBBLKID=y
 BR2_PACKAGE_UTIL_LINUX_LIBUUID=y
 
