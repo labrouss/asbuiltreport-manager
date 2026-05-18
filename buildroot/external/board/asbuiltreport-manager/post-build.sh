@@ -72,11 +72,15 @@ install -d -m 0755 "${TARGET_DIR}/var/lib/docker-preload"
 # 4. Write /etc/fstab with correct mount points
 # =============================================================================
 cat > "${TARGET_DIR}/etc/fstab" << 'EOF'
-# <file system>  <mount pt>  <type>   <options>                       <dump>  <pass>
-/dev/sda2        /           ext4     rw,noatime                      0       1
-proc             /proc       proc     defaults                         0       0
-sysfs            /sys        sysfs    defaults                         0       0
+# <file system>  <mount pt>   <type>   <options>                       <dump>  <pass>
+/dev/sda2        /            ext4     rw,noatime                      0       1
+/dev/sda1        /boot/efi    vfat     ro,noauto,umask=0077            0       0
+proc             /proc        proc     defaults                         0       0
+sysfs            /sys         sysfs    defaults                         0       0
 EOF
+
+# Create the EFI mount point
+install -d -m 0755 "${TARGET_DIR}/boot/efi"
 
 # =============================================================================
 # 5. Write /etc/inittab — busybox init with proper mounts before rcS

@@ -1,0 +1,76 @@
+#!/bin/sh
+# /etc/init.d/S50ttyd — Web-based terminal on port 8443
+#
+# ttyd provides a browser-accessible shell via HTTPS on port 8443.
+# Access: https://<vm-ip>:8443
+# No serial port or SSH client needed — works directly in any browser.
+#
+# TLS: uses a self-signed certificate generated on first start.
+# Accept the browser's certificate warning (untrusted self-signed cert).
+
+PIDFILE=/var/run/ttyd.pid
+LOGFILE=/var/log/ttyd.log
+CERTFILE=/etc/ttyd/ttyd.crt
+KEYFILE=/etc/ttyd/ttyd.key
+PORT=8443
+
+generate_cert() {
+    mkdir -p /etc/ttyd
+    if [ ! -f "$CERTFILE" ] || [ ! -f "$KEYFILE" ]; then
+        echo "Generating ttyd TLS certificate..."
+        openssl req -x509 -newkey rsa:2048 -keyout "$KEYFILE" -out "$CERTFILE" \
+            -days 3650 -nodes \
+            -subj "/CN=asbuiltreport-manager/O=AsBuiltReport/C=AU" \
+            2>/dev/null \
+            && echo "TLS certificate generated." \
+            || echo "WARNING: openssl not available — ttyd will run without TLS"
+    fi
+}
+
+case "$1" in
+  start)
+    echo -n "Starting ttyd (web terminal on :${PORT})... "
+
+    generate_cert
+
+    if [ -f "$CERTFILE" ] && [ -f "$KEYFILE" ]; then
+        TLS_OPTS="--ssl --ssl-cert $CERTFILE --ssl-key $KEYFILE"
+    else
+        TLS_OPTS=""
+        PORT=8080
+        echo -n "(no TLS, port 8080) "
+    fi
+
+    start-stop-daemon --start --quiet --background \
+        --pidfile "$PIDFILE" --make-pidfile \
+        --exec /usr/bin/ttyd -- \
+            --port "$PORT" \
+            --writable \
+            --once=false \
+            --max-clients=5 \
+            $TLS_OPTS \
+            /bin/sh -l \
+        >> "$LOGFILE" 2>&1
+
+    echo "OK"
+    ;;
+  stop)
+    echo -n "Stopping ttyd... "
+    start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
+    rm -f "$PIDFILE"
+    echo "OK"
+    ;;
+  restart)
+    "$0" stop; sleep 1; "$0" start
+    ;;
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+        echo "ttyd is running (pid $(cat $PIDFILE)) on port $PORT"
+    else
+        echo "ttyd is not running"
+    fi
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+esac
