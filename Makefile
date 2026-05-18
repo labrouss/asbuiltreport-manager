@@ -56,6 +56,8 @@ deploy-worker:  ## Hot-copy worker.ps1 and restart worker
 	docker cp worker/entrypoint.ps1 $(WORKER):/app/entrypoint.ps1
 	docker cp worker/reports/Invoke-HPEOneViewReport.ps1 \
 	          $(WORKER):/app/reports/Invoke-HPEOneViewReport.ps1
+	docker cp worker/reports/Get-RVToolsReport.ps1 \
+	          $(WORKER):/app/reports/Get-RVToolsReport.ps1
 	$(COMPOSE) restart worker
 
 ## ── Logs ──────────────────────────────────────────────────────────────────────
