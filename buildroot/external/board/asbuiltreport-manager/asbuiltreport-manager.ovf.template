@@ -4,6 +4,7 @@
           xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
           xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
           xmlns:vmw="http://www.vmware.com/schema/ovf"
+          xmlns:oe="http://schemas.dmtf.org/ovf/environment/1"
           xml:lang="en-US">
 
   <References>
@@ -109,7 +110,7 @@
     </VirtualHardwareSection>
 
     <!-- OVF Properties — configurable at deploy time in vCenter -->
-    <ProductSection>
+    <ProductSection ovf:required="false" ovf:transport="com.vmware.guestInfo">
       <Info>Application configuration properties</Info>
       <Product>AsBuiltReport Manager</Product>
       <Vendor>AsBuiltReport</Vendor>

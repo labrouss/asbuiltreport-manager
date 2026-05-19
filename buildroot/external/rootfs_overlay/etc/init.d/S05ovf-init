@@ -2,13 +2,37 @@
 # /etc/init.d/S05ovf-init
 # Reads VMware guestinfo OVF properties and configures the system.
 # Runs every boot but only applies password/SSH key on first run.
-# The rootfs is already rw when this runs (remounted in rcS).
 
 SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
-NETCFG="/etc/network/config"
 
 get_guestinfo() {
-  vmware-rpctool "info-get guestinfo.$1" 2>/dev/null || true
+    local key="$1"
+    local val=""
+
+    # Method 1: vmware-rpctool backdoor (requires heartbeat channel to be open)
+    if command -v vmware-rpctool >/dev/null 2>&1; then
+        val=$(vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null)
+    fi
+
+    # Method 2: OVF environment XML delivered via guestinfo.ovfenv
+    if [ -z "$val" ] && command -v vmware-rpctool >/dev/null 2>&1; then
+        local ovfenv
+        ovfenv=$(vmware-rpctool "info-get guestinfo.ovfenv" 2>/dev/null)
+        if [ -n "$ovfenv" ]; then
+            # Parse: <Property oe:key="hostname" oe:value="myhost"/>
+            val=$(printf '%s' "$ovfenv" | \
+                  grep -o "key=\"${key}\" oe:value=\"[^\"]*\"" | \
+                  sed 's/.*oe:value="\([^"]*\)"/\1/' | head -1)
+            # Also try without oe: prefix
+            if [ -z "$val" ]; then
+                val=$(printf '%s' "$ovfenv" | \
+                      grep -o "key=\"${key}\" ovf:value=\"[^\"]*\"" | \
+                      sed 's/.*ovf:value="\([^"]*\)"/\1/' | head -1)
+            fi
+        fi
+    fi
+
+    printf '%s' "$val"
 }
 
 case "$1" in
@@ -22,55 +46,46 @@ case "$1" in
     PASSWORD=$(get_guestinfo password)
     SSH_KEY=$(get_guestinfo ssh_authorized_key)
 
-    HOSTNAME="${HOSTNAME:-asbuiltreport-manager}"
-    DNS_SERVERS="${DNS_SERVERS:-8.8.8.8 8.8.4.4}"
-
-    # Set hostname
-    echo "$HOSTNAME" > /etc/hostname
-    hostname "$HOSTNAME"
-    # Update /etc/hosts
-    if grep -q "127.0.1.1" /etc/hosts 2>/dev/null; then
-      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$HOSTNAME/" /etc/hosts
-    else
-      echo "127.0.1.1	$HOSTNAME" >> /etc/hosts
+    # Apply hostname
+    if [ -n "$HOSTNAME" ]; then
+        echo "$HOSTNAME" > /etc/hostname
+        hostname "$HOSTNAME"
     fi
 
-    # Write network config for S10network
-    mkdir -p "$(dirname $NETCFG)"
+    # Apply network (static or DHCP — handled by S10network)
     if [ -n "$IP_CIDR" ]; then
-      cat > "$NETCFG" << EOF
-NETWORK_MODE=static
-IP_CIDR="$IP_CIDR"
-GATEWAY="$GATEWAY"
-DNS_SERVERS="$DNS_SERVERS"
+        mkdir -p /etc/network
+        cat > /etc/network/config << EOF
+INTERFACE=eth0
+IP_CIDR=$IP_CIDR
+GATEWAY=$GATEWAY
+DNS=$DNS_SERVERS
 EOF
-    else
-      echo "NETWORK_MODE=dhcp" > "$NETCFG"
     fi
 
     # One-time: password and SSH key
     if [ ! -f "$SENTINEL" ]; then
-      if [ -n "$PASSWORD" ]; then
-        echo "root:$PASSWORD" | chpasswd
-        # Force password change on first console/SSH login
-        chage -d 0 root 2>/dev/null || passwd -e root 2>/dev/null || true
-        # Start ttyd now that a password is set
-        /etc/init.d/S50ttyd start 2>/dev/null || true
-      fi
-      if [ -n "$SSH_KEY" ]; then
-        mkdir -p /root/.ssh
-        chmod 700 /root/.ssh
-        echo "$SSH_KEY" >> /root/.ssh/authorized_keys
-        chmod 600 /root/.ssh/authorized_keys
-      fi
-      mkdir -p "$(dirname $SENTINEL)"
-      touch "$SENTINEL"
+        if [ -n "$PASSWORD" ]; then
+            echo "root:$PASSWORD" | chpasswd
+            # Force password change on first login
+            chage -d 0 root 2>/dev/null || passwd -e root 2>/dev/null || true
+            # Start ttyd now that a password is set
+            /etc/init.d/S50ttyd start 2>/dev/null || true
+        fi
+
+        if [ -n "$SSH_KEY" ]; then
+            mkdir -p /root/.ssh
+            chmod 700 /root/.ssh
+            echo "$SSH_KEY" >> /root/.ssh/authorized_keys
+            chmod 600 /root/.ssh/authorized_keys
+        fi
+
+        mkdir -p "$(dirname $SENTINEL)"
+        touch "$SENTINEL"
     fi
 
     echo "OVF init complete."
     ;;
-  stop|restart) ;;
-  *)
-    echo "Usage: $0 {start|stop}"
-    exit 1
+  stop) ;;
+  *) echo "Usage: $0 {start|stop}"; exit 1 ;;
 esac
