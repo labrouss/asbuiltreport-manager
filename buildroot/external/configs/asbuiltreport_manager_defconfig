@@ -25,17 +25,17 @@ BR2_x86_64=y
 BR2_TARGET_OPTIMIZATION="-O2 -pipe -march=x86-64-v2"
 
 # ── Toolchain ────────────────────────────────────────────────────────────────
-# External pre-built glibc toolchain from Bootlin
-# Avoids building glibc from source which fails on GitHub Actions runners
-# due to host gcc version conflicts with Buildroot 2024.02.6 + glibc 2.38.
-# Bootlin toolchain: x86_64, glibc, gcc 13.3, Buildroot 2024.02
+# External pre-built glibc toolchain from Bootlin (built-in BR2 integration)
+# Uses BR2_TOOLCHAIN_EXTERNAL_BOOTLIN which selects the correct stable tarball.
+# This avoids building glibc from source (fails on GH Actions with glibc 2.38).
+# Variant: x86-64, glibc stable, gcc 13.x, kernel headers 6.1
 BR2_TOOLCHAIN_EXTERNAL=y
-BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
-BR2_TOOLCHAIN_EXTERNAL_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--glibc--stable-2024.02-1.tar.bz2"
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_X86_64_GLIBC_STABLE=y
 BR2_TOOLCHAIN_EXTERNAL_GCC_13=y
-BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_6=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_1=y
 BR2_TOOLCHAIN_EXTERNAL_LOCALE=y
-BR2_TOOLCHAIN_EXTERNAL_INET_RPC=n
+BR2_TOOLCHAIN_EXTERNAL_HAS_INET_RPC=n
 BR2_TOOLCHAIN_EXTERNAL_HAS_SSP=y
 BR2_TOOLCHAIN_EXTERNAL_CXX=y
 BR2_TOOLCHAIN_EXTERNAL_WCHAR=y
