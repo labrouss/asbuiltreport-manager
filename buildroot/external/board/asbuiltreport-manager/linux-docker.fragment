@@ -124,3 +124,8 @@ CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_VMWARE_VMCI=y
 CONFIG_VMWARE_VMCI_VSOCKETS=y
 CONFIG_VMWARE_BALLOON=y
+
+# ── x86 I/O port permissions (required for VMware backdoor) ──────────────────
+# Without CONFIG_X86_IOPL_IOPERM, iopl() and ioperm() are no-ops in kernel 5.4+
+# and the VMware backdoor port 0x5658 access faults silently.
+CONFIG_X86_IOPL_IOPERM=y
