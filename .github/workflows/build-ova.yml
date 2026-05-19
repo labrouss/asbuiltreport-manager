@@ -375,7 +375,7 @@ jobs:
             output/images/rootfs.ext2
             output/.config
             output/Makefile
-          key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment', 'buildroot/external/board/asbuiltreport-manager/post-build.sh', 'buildroot/external/rootfs_overlay/**') }}
+          key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment', 'buildroot/external/board/asbuiltreport-manager/post-build.sh', 'buildroot/external/rootfs_overlay/**', 'buildroot/external/package/**') }}
           restore-keys: |
             br-output-${{ env.BUILDROOT_VERSION }}-
 
@@ -500,7 +500,7 @@ jobs:
             output/images/rootfs.ext2
             output/.config
             output/Makefile
-          key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment', 'buildroot/external/board/asbuiltreport-manager/post-build.sh', 'buildroot/external/rootfs_overlay/**') }}
+          key: br-output-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/external/configs/asbuiltreport_manager_defconfig', 'buildroot/external/board/asbuiltreport-manager/linux-docker.fragment', 'buildroot/external/board/asbuiltreport-manager/post-build.sh', 'buildroot/external/rootfs_overlay/**', 'buildroot/external/package/**') }}
 
       # -- Verify OVA -----------------------------------------------------------
       - name: Verify OVA output
