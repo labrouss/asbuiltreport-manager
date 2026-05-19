@@ -25,20 +25,13 @@ BR2_x86_64=y
 BR2_TARGET_OPTIMIZATION="-O2 -pipe -march=x86-64-v2"
 
 # ── Toolchain ────────────────────────────────────────────────────────────────
-# External pre-built glibc toolchain from Bootlin (built-in BR2 integration)
-# Uses BR2_TOOLCHAIN_EXTERNAL_BOOTLIN which selects the correct stable tarball.
-# This avoids building glibc from source (fails on GH Actions with glibc 2.38).
-# Variant: x86-64, glibc stable, gcc 13.x, kernel headers 6.1
-BR2_TOOLCHAIN_EXTERNAL=y
-BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
-BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_X86_64_GLIBC_STABLE=y
-BR2_TOOLCHAIN_EXTERNAL_GCC_13=y
-BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_1=y
-BR2_TOOLCHAIN_EXTERNAL_LOCALE=y
-BR2_TOOLCHAIN_EXTERNAL_HAS_INET_RPC=n
-BR2_TOOLCHAIN_EXTERNAL_HAS_SSP=y
-BR2_TOOLCHAIN_EXTERNAL_CXX=y
-BR2_TOOLCHAIN_EXTERNAL_WCHAR=y
+# musl toolchain — open-vm-tools is excluded (requires glibc).
+# OVF property reading is handled by a pure-shell vmware-rpctool substitute
+# that uses the VMware backdoor I/O port directly via /dev/port.
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_GCC_VERSION_13_X=y
+BR2_BINUTILS_VERSION_2_41_X=y
 
 # ── System ────────────────────────────────────────────────────────────────────
 BR2_SYSTEM_DHCP="eth0"
@@ -120,8 +113,10 @@ BR2_PACKAGE_JQ=y
 BR2_CCACHE=y
 
 # ── VMware guest tools ────────────────────────────────────────────────────────
-BR2_PACKAGE_OPEN_VM_TOOLS=y
-BR2_PACKAGE_OPEN_VM_TOOLS_SCRIPTS=y
+# NOTE: open-vm-tools requires glibc and cannot build against musl.
+# OVF property reading is handled by usr/local/bin/vmware-rpctool (shell script)
+# which reads guestinfo from EFI variables that VMware injects at boot time.
+# VMware VMCI kernel modules (CONFIG_VMWARE_VMCI=y) enable the backdoor channel.
 BR2_PACKAGE_UTIL_LINUX_LIBBLKID=y
 BR2_PACKAGE_UTIL_LINUX_LIBUUID=y
 
