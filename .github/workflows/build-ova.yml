@@ -112,7 +112,7 @@ jobs:
         uses: actions/cache@v4.2.3
         with:
           path: ${{ env.IMAGES_DIR }}/${{ env.WORKER_IMAGE }}.tar.gz
-          key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
+          key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1', 'worker/reports/**') }}
 
       - name: Fail fast if worker tarball unavailable
         if: >
@@ -213,7 +213,7 @@ jobs:
         uses: actions/cache@v4.2.3
         with:
           path: ${{ env.IMAGES_DIR }}/${{ env.WORKER_IMAGE }}.tar.gz
-          key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1') }}
+          key: worker-tarball-${{ hashFiles('worker/Dockerfile', 'worker/install-powercli.ps1', 'worker/install-modules.ps1', 'worker/reports/**') }}
 
       # ── Record metadata for the release notes ────────────────────────────────
       - name: Record image metadata

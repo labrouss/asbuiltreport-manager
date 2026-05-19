@@ -1,3 +1,5 @@
 menu "AsBuiltReport Manager"
     source "$BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH/package/asbuiltreport-manager/Config.in"
+
+source "$BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH/package/vmware-rpctool/Config.in"
 endmenu

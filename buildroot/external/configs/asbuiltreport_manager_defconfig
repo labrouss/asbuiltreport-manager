@@ -113,6 +113,7 @@ BR2_PACKAGE_JQ=y
 BR2_CCACHE=y
 
 # ── VMware guest tools ────────────────────────────────────────────────────────
+BR2_PACKAGE_VMWARE_RPCTOOL=y
 # NOTE: open-vm-tools requires glibc and cannot build against musl.
 # OVF property reading is handled by usr/local/bin/vmware-rpctool (shell script)
 # which reads guestinfo from EFI variables that VMware injects at boot time.
