@@ -1,11 +1,21 @@
 /*
- * vmware-rpctool.c — standalone VMware GuestInfo reader
+ * vmware-rpctool.c — VMware GuestInfo reader
  *
- * Self-contained implementation of the VMware RPCI backdoor protocol.
- * Extracted from open-vm-tools backdoorGcc64.c + message.c + rpcout.c
+ * Faithful port of open-vm-tools backdoorGcc64.c + message.c + rpcout.c
+ * Compiles against musl libc without any open-vm-tools dependencies.
  *
- * Compile: gcc -O2 -o vmware-rpctool vmware-rpctool.c
- * Usage:   vmware-rpctool "info-get guestinfo.hostname"
+ * Key reference: open-vm-tools/lib/backdoor/backdoorGcc64.c
+ * The x86-64 backdoor uses BDOOR_CALL macro which saves/restores rbp
+ * because the calling convention uses rbp as frame pointer.
+ *
+ * Message protocol (from open-vm-tools/lib/message/message.c):
+ *   Open:        IN  eax=MAGIC, ebx=RPCI, ecx=TYPE_OPEN<<16,    edx=PORT
+ *   SendSize:    IN  eax=MAGIC, ebx=size, ecx=TYPE_SENDLEN<<16|id, edx=PORT
+ *   SendData:    OUTSB via port PORTHB, ecx=size, esi=buf, ebp=cookie1, edi=cookie2, eax=MAGIC, ebx=flags, edx=PORTHB
+ *   RecvSize:    IN  eax=MAGIC, ebx=0,   ecx=TYPE_RECVLEN<<16|id, edx=PORT
+ *   RecvData:    INSB via port PORTHB
+ *   RecvStatus:  IN  eax=MAGIC, ebx=0x10001, ecx=TYPE_RECVSTATUS<<16|id, edx=PORT
+ *   Close:       IN  eax=MAGIC, ebx=0,   ecx=TYPE_CLOSE<<16|id, edx=PORT
  */
 
 #include <stdio.h>
@@ -16,288 +26,288 @@
 #include <signal.h>
 #include <sys/io.h>
 
-/* ── Backdoor constants (from backdoor_def.h) ─────────────────────────── */
-#define BDOOR_MAGIC        0x564D5868UL   /* 'VMXh' */
-#define BDOOR_PORT         0x5658U
-#define BDOORHB_PORT       0x5659U
+/* ── Constants from backdoor_def.h ───────────────────────────────────────── */
+#define BDOOR_MAGIC      0x564D5868UL
+#define BDOOR_PORT       0x5658U
+#define BDOORHB_PORT     0x5659U
 
-#define BDOOR_CMD_GETVERSION   0x0AU
-#define BDOOR_CMD_MESSAGE      0x1EU
-
-#define BDOOR_CMD_GETGUEST_MEM  0x18U     /* unused here */
-
-/* Message commands — passed in ECX bits 31:16 */
-#define MESSAGE_TYPE_OPEN      0U
-#define MESSAGE_TYPE_SENDSIZE  1U
+/* Message type IDs from message.h */
+#define MESSAGE_TYPE_OPEN        0U
+#define MESSAGE_TYPE_SENDSIZE    1U
 #define MESSAGE_TYPE_SENDPAYLOAD 2U
-#define MESSAGE_TYPE_RECVSIZE  3U
+#define MESSAGE_TYPE_RECVSIZE    3U
 #define MESSAGE_TYPE_RECVPAYLOAD 4U
-#define MESSAGE_TYPE_RECVSTATUS 5U
-#define MESSAGE_TYPE_CLOSE     6U
+#define MESSAGE_TYPE_RECVSTATUS  5U
+#define MESSAGE_TYPE_CLOSE       6U
 
-/* Flags in EBX for high-bandwidth port */
-#define BDOORHB_CMD_MESSAGE    0x4C455645U  /* 'LEVE' — low-bandwidth */
+#define RPCI_PROTOCOL    0x49435052UL   /* 'RPCI' */
+#define RPCI_STATUS_OK   0x10000U
 
-/* ECX flag bits */
-#define BDOOR_RPCI_OK          0x0001U
-#define BDOOR_RPCI_CLOSED      0x0002U
+/* High-bandwidth flags */
+#define BDOORHB_DO_READ  0x10000U
+#define BDOORHB_DO_WRITE 0x10000U
 
-/* ── Backdoor inline asm (x86-64, matches backdoorGcc64.c) ─────────────── */
 /*
- * The VMware backdoor on x86-64 uses the same port I/O as x86.
- * RBP is used as an extra parameter register.
+ * ── x86-64 backdoor inline assembly ───────────────────────────────────────
  *
- * Low-bandwidth call (port 0x5658):
- *   IN:  EAX=BDOOR_MAGIC, EBX=arg, ECX=(cmd<<16)|channel, EDX=port, ESI=cookie1, EDI=cookie2
- *   OUT: EAX=status,      EBX=result_lo, ECX=result_hi, EDX=?, ESI=cookie1_out, EDI=cookie2_out
+ * From backdoorGcc64.c. The key insight: rbp is the x86-64 frame pointer
+ * and is not in the general clobber list, so we must save/restore it
+ * explicitly around the IN instruction. The 6th parameter (cookie1) is
+ * passed via rbp on the hardware level.
+ *
+ * We use a slightly different approach from the original — passing all
+ * 6 registers explicitly — which avoids the rbp save/restore issue.
  */
-#define BACKDOOR_CALL(ax,bx,cx,dx,si,di)                    \
-    __asm__ __volatile__(                                    \
-        "pushq %%rbp       \n\t"                             \
-        "movq  %%rsi, %%rbp\n\t"                             \
-        "movq  %6,    %%rsi\n\t"                             \
-        "inl   %%dx, %%eax \n\t"                             \
-        "xchgq %%rsi, %%rbp\n\t"                             \
-        "popq  %%rbp       \n\t"                             \
-        : "+a"(ax), "+b"(bx), "+c"(cx), "+d"(dx),           \
-          "+S"(si), "+D"(di)                                 \
-        : "r"(si)                                            \
-        : "memory", "cc"                                     \
-    )
+#define BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi)    \
+    do {                                                 \
+        asm volatile (                                   \
+            "push %%rbp\n\t"                             \
+            "mov  %%rsi, %%rbp\n\t"                      \
+            "in   %%dx, %%eax\n\t"                       \
+            "xchg %%rbp, %%rsi\n\t"                      \
+            "pop  %%rbp\n\t"                             \
+            : "+a" (eax), "+b" (ebx), "+c" (ecx),       \
+              "+d" (edx), "+S" (esi), "+D" (edi)         \
+            :                                            \
+            : "memory", "cc"                             \
+        );                                               \
+    } while (0)
 
 /*
- * High-bandwidth send (port 0x5659, rep outsb):
- *   IN:  EAX=BDOOR_MAGIC, EBX=BDOORHB_CMD_MESSAGE|HB_DO_WRITE,
- *        ECX=size, EDX=BDOORHB_PORT, ESI=buf_ptr, EDI=channel_cookie2
- * The RBP trick carries cookie1.
+ * High-bandwidth OUT (send data to VMware).
+ * Uses REP OUTSB: port in dx, count in ecx, source in esi.
+ * rbp carries cookie1 per the protocol.
  */
-#define BACKDOOR_HB_OUT(ax,bx,cx,dx,si,di,bp_val)           \
-    __asm__ __volatile__(                                    \
-        "pushq %%rbp       \n\t"                             \
-        "movl  %7, %%ebp   \n\t"                             \
-        "rep   outsb       \n\t"                             \
-        "popq  %%rbp       \n\t"                             \
-        : "+a"(ax), "+b"(bx), "+c"(cx), "+d"(dx),           \
-          "+S"(si), "+D"(di)                                 \
-        : "r"(bp_val)                                        \
-        : "memory", "cc"                                     \
-    )
+#define BACKDOOR_HB_OUT(eax, ebx, ecx, edx, esi, edi, ebp_val) \
+    do {                                                          \
+        asm volatile (                                            \
+            "push %%rbp\n\t"                                      \
+            "mov  %7, %%ebp\n\t"                                  \
+            "rep outsb\n\t"                                       \
+            "pop  %%rbp\n\t"                                      \
+            : "+a" (eax), "+b" (ebx), "+c" (ecx),                \
+              "+d" (edx), "+S" (esi), "+D" (edi)                  \
+            : "r" ((uint32_t)(ebp_val))                           \
+            : "memory", "cc"                                      \
+        );                                                        \
+    } while (0)
 
-#define BACKDOOR_HB_IN(ax,bx,cx,dx,si,di,bp_val)            \
-    __asm__ __volatile__(                                    \
-        "pushq %%rbp       \n\t"                             \
-        "movl  %7, %%ebp   \n\t"                             \
-        "rep   insb        \n\t"                             \
-        "popq  %%rbp       \n\t"                             \
-        : "+a"(ax), "+b"(bx), "+c"(cx), "+d"(dx),           \
-          "+S"(si), "+D"(di)                                 \
-        : "r"(bp_val)                                        \
-        : "memory", "cc"                                     \
-    )
+/*
+ * High-bandwidth IN (receive data from VMware).
+ * Uses REP INSB: port in dx, count in ecx, dest in edi.
+ */
+#define BACKDOOR_HB_IN(eax, ebx, ecx, edx, esi, edi, ebp_val)  \
+    do {                                                          \
+        asm volatile (                                            \
+            "push %%rbp\n\t"                                      \
+            "mov  %7, %%ebp\n\t"                                  \
+            "rep insb\n\t"                                        \
+            "pop  %%rbp\n\t"                                      \
+            : "+a" (eax), "+b" (ebx), "+c" (ecx),                \
+              "+d" (edx), "+S" (esi), "+D" (edi)                  \
+            : "r" ((uint32_t)(ebp_val))                           \
+            : "memory", "cc"                                      \
+        );                                                        \
+    } while (0)
 
-/* ── Check we're in VMware ────────────────────────────────────────────── */
-static int in_vmware(void)
-{
-    uint32_t ax = BDOOR_MAGIC, bx = ~BDOOR_MAGIC;
-    uint32_t cx = BDOOR_CMD_GETVERSION << 16, dx = BDOOR_PORT;
-    uint32_t si = 0, di = 0;
-    BACKDOOR_CALL(ax, bx, cx, dx, si, di);
-    return (bx == BDOOR_MAGIC);
-}
-
-/* ── Message channel ──────────────────────────────────────────────────── */
+/* ── Channel state ────────────────────────────────────────────────────────── */
 typedef struct {
-    uint16_t  id;
-    uint32_t  cookie1;
-    uint32_t  cookie2;
+    uint16_t id;
+    uint32_t cookie1;
+    uint32_t cookie2;
 } Channel;
 
-static int not_vmware = 0;
-static void sig_handler(int s) { not_vmware = 1; }
+/* ── Signal handling (print clean error if not in VMware) ─────────────────── */
+static volatile int got_fault = 0;
+static void fault_handler(int sig) { got_fault = 1; }
 
-static int channel_open(Channel *c)
+static void setup_signals(void)
 {
-    uint32_t ax = BDOOR_MAGIC;
-    uint32_t bx = 0x49435052UL; /* 'RPCI' */
-    uint32_t cx = (MESSAGE_TYPE_OPEN << 16);
-    uint32_t dx = BDOOR_PORT;
-    uint32_t si = 0, di = 0;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = fault_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS,  &sa, NULL);
+    sigaction(SIGILL,  &sa, NULL);
+}
 
-    BACKDOOR_CALL(ax, bx, cx, dx, si, di);
+/* ── Check we are inside VMware ───────────────────────────────────────────── */
+static int vmware_check(void)
+{
+    uint32_t eax = BDOOR_MAGIC;
+    uint32_t ebx = ~BDOOR_MAGIC;
+    uint32_t ecx = 10 << 16;    /* BDOOR_CMD_GETVERSION = 0x0a */
+    uint32_t edx = BDOOR_PORT;
+    uint32_t esi = 0, edi = 0;
 
-    if ((cx & 0x10000U) == 0) return -1;
+    got_fault = 0;
+    BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi);
+    if (got_fault) return 0;
 
-    c->id      = cx & 0xffffU;
-    c->cookie1 = si;
-    c->cookie2 = di;
+    return (ebx == BDOOR_MAGIC);
+}
+
+/* ── Open RPC channel ─────────────────────────────────────────────────────── */
+static int channel_open(Channel *ch)
+{
+    uint32_t eax = BDOOR_MAGIC;
+    uint32_t ebx = RPCI_PROTOCOL;
+    uint32_t ecx = (MESSAGE_TYPE_OPEN << 16);
+    uint32_t edx = BDOOR_PORT;
+    uint32_t esi = 0, edi = 0;
+
+    BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi);
+
+    if ((ecx & RPCI_STATUS_OK) == 0) return -1;
+
+    ch->id      = ecx & 0xffffU;
+    ch->cookie1 = esi;
+    ch->cookie2 = edi;
     return 0;
 }
 
-static int channel_close(Channel *c)
+/* ── Close RPC channel ────────────────────────────────────────────────────── */
+static void channel_close(Channel *ch)
 {
-    uint32_t ax = BDOOR_MAGIC, bx = 0;
-    uint32_t cx = (MESSAGE_TYPE_CLOSE << 16) | c->id;
-    uint32_t dx = BDOOR_PORT;
-    uint32_t si = c->cookie1, di = c->cookie2;
-
-    BACKDOOR_CALL(ax, bx, cx, dx, si, di);
-    return 0;
+    uint32_t eax = BDOOR_MAGIC, ebx = 0;
+    uint32_t ecx = (MESSAGE_TYPE_CLOSE << 16) | ch->id;
+    uint32_t edx = BDOOR_PORT;
+    uint32_t esi = ch->cookie1, edi = ch->cookie2;
+    BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi);
 }
 
-static int channel_send(Channel *c, const char *buf, uint32_t len)
+/* ── Send message ─────────────────────────────────────────────────────────── */
+static int channel_send(Channel *ch, const char *msg, uint32_t len)
 {
-    uint32_t ax, bx, cx, dx, si, di;
+    uint32_t eax, ebx, ecx, edx, esi, edi;
 
-    /* 1. Send size */
-    ax = BDOOR_MAGIC; bx = len;
-    cx = (MESSAGE_TYPE_SENDSIZE << 16) | c->id;
-    dx = BDOOR_PORT;
-    si = c->cookie1; di = c->cookie2;
-    BACKDOOR_CALL(ax, bx, cx, dx, si, di);
-    if ((cx & 0x10000U) == 0) return -1;
-
+    /* Send length */
+    eax = BDOOR_MAGIC; ebx = len;
+    ecx = (MESSAGE_TYPE_SENDSIZE << 16) | ch->id;
+    edx = BDOOR_PORT;
+    esi = ch->cookie1; edi = ch->cookie2;
+    BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi);
+    if ((ecx & RPCI_STATUS_OK) == 0) return -1;
     if (len == 0) return 0;
 
-    /* 2. Send payload via high-bandwidth port */
-    ax = BDOOR_MAGIC;
-    bx = 0x10000U;   /* BDOORHB write flag */
-    cx = len;
-    dx = BDOORHB_PORT;
-    si = (uint32_t)(uintptr_t)buf;
-    di = c->cookie2;
-    BACKDOOR_HB_OUT(ax, bx, cx, dx, si, di, c->cookie1);
-    if ((bx & 0x10000U) == 0) return -1;
+    /* Send payload via high-bandwidth port */
+    eax = BDOOR_MAGIC;
+    ebx = BDOORHB_DO_WRITE;
+    ecx = len;
+    edx = BDOORHB_PORT;
+    esi = (uint32_t)(uintptr_t)msg;
+    edi = ch->cookie2;
+    BACKDOOR_HB_OUT(eax, ebx, ecx, edx, esi, edi, ch->cookie1);
+    if ((ebx & RPCI_STATUS_OK) == 0) return -1;
 
     return 0;
 }
 
-static int channel_recv(Channel *c, char **out, uint32_t *outlen)
+/* ── Receive reply ────────────────────────────────────────────────────────── */
+static int channel_recv(Channel *ch, char **out, uint32_t *outlen)
 {
-    uint32_t ax, bx, cx, dx, si, di;
+    uint32_t eax, ebx, ecx, edx, esi, edi;
     uint32_t len;
     char *buf;
 
-    /* 1. Get reply size */
-    ax = BDOOR_MAGIC; bx = 0;
-    cx = (MESSAGE_TYPE_RECVSIZE << 16) | c->id;
-    dx = BDOOR_PORT;
-    si = c->cookie1; di = c->cookie2;
-    BACKDOOR_CALL(ax, bx, cx, dx, si, di);
-    if ((cx & 0x10000U) == 0) return -1;
-    len = bx;
+    /* Get reply length */
+    eax = BDOOR_MAGIC; ebx = 0;
+    ecx = (MESSAGE_TYPE_RECVSIZE << 16) | ch->id;
+    edx = BDOOR_PORT;
+    esi = ch->cookie1; edi = ch->cookie2;
+    BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi);
+    if ((ecx & RPCI_STATUS_OK) == 0) return -1;
+    len = ebx;
 
     buf = malloc(len + 1);
     if (!buf) return -1;
     buf[len] = '\0';
-    *out    = buf;
-    *outlen = len;
+    *out = buf; *outlen = len;
 
     if (len > 0) {
-        /* 2. Receive payload via high-bandwidth port */
-        ax = BDOOR_MAGIC;
-        bx = 0x10000U;  /* BDOORHB read flag */
-        cx = len;
-        dx = BDOORHB_PORT;
-        si = c->cookie1;
-        di = (uint32_t)(uintptr_t)buf;
-        BACKDOOR_HB_IN(ax, bx, cx, dx, si, di, c->cookie1);
-        if ((bx & 0x10000U) == 0) { free(buf); return -1; }
+        /* Receive payload via high-bandwidth port */
+        eax = BDOOR_MAGIC;
+        ebx = BDOORHB_DO_READ;
+        ecx = len;
+        edx = BDOORHB_PORT;
+        esi = ch->cookie1;
+        edi = (uint32_t)(uintptr_t)buf;
+        BACKDOOR_HB_IN(eax, ebx, ecx, edx, esi, edi, ch->cookie1);
+        if ((ebx & RPCI_STATUS_OK) == 0) { free(buf); return -1; }
     }
 
-    /* 3. Ack receipt */
-    ax = BDOOR_MAGIC; bx = 0x00010001U;
-    cx = (MESSAGE_TYPE_RECVSTATUS << 16) | c->id;
-    dx = BDOOR_PORT;
-    si = c->cookie1; di = c->cookie2;
-    BACKDOOR_CALL(ax, bx, cx, dx, si, di);
+    /* Acknowledge receipt */
+    eax = BDOOR_MAGIC; ebx = 0x00010001U;
+    ecx = (MESSAGE_TYPE_RECVSTATUS << 16) | ch->id;
+    edx = BDOOR_PORT;
+    esi = ch->cookie1; edi = ch->cookie2;
+    BACKDOOR_CALL(eax, ebx, ecx, edx, esi, edi);
 
     return 0;
 }
 
-/* ── RpcOut_sendOne equivalent ────────────────────────────────────────── */
-static int rpc_send_one(const char *request, char **result)
+/* ── Send one RPC command and return result ───────────────────────────────── */
+static int rpc_sendone(const char *request, char **result, uint32_t *rlen)
 {
-    Channel c;
-    uint32_t rlen = 0;
+    Channel ch;
     int rc;
 
-    if (channel_open(&c) < 0) {
-        fprintf(stderr, "vmware-rpctool: failed to open RPC channel\n");
-        return -1;
-    }
+    if (channel_open(&ch) < 0) return -1;
 
-    rc = channel_send(&c, request, (uint32_t)strlen(request));
-    if (rc < 0) {
-        fprintf(stderr, "vmware-rpctool: send failed\n");
-        channel_close(&c);
-        return -1;
-    }
+    rc = channel_send(&ch, request, (uint32_t)strlen(request));
+    if (rc < 0) { channel_close(&ch); return -1; }
 
-    rc = channel_recv(&c, result, &rlen);
-    channel_close(&c);
-
-    if (rc < 0) {
-        fprintf(stderr, "vmware-rpctool: recv failed\n");
-        return -1;
-    }
-
-    return (int)rlen;
+    rc = channel_recv(&ch, result, rlen);
+    channel_close(&ch);
+    return rc;
 }
 
-/* ── Signal handler so we get a clean message if not in VMware ─────────── */
-static void setup_sig(void)
-{
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = sig_handler;
-    sigfillset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, NULL);
-    sigaction(SIGBUS,  &sa, NULL);
-}
-
+/* ── main ─────────────────────────────────────────────────────────────────── */
 int main(int argc, char *argv[])
 {
     char *result = NULL;
-    int len;
+    uint32_t rlen = 0;
+    int rc;
 
     if (argc < 2) {
         fprintf(stderr, "Usage: vmware-rpctool <command>\n");
-        fprintf(stderr, "  e.g. vmware-rpctool \"info-get guestinfo.hostname\"\n");
+        fprintf(stderr, "  e.g.: vmware-rpctool \"info-get guestinfo.hostname\"\n");
         return 1;
     }
 
+    /* Request I/O port access */
     if (ioperm(BDOOR_PORT, 2, 1) < 0 && iopl(3) < 0) {
         fprintf(stderr, "vmware-rpctool: cannot access I/O ports: %s\n",
                 strerror(errno));
         return 1;
     }
 
-    setup_sig();
+    setup_signals();
 
-    if (!in_vmware() || not_vmware) {
+    if (!vmware_check() || got_fault) {
         fprintf(stderr, "vmware-rpctool: not running inside VMware\n");
         return 1;
     }
 
-    len = rpc_send_one(argv[1], &result);
-    if (not_vmware) {
+    rc = rpc_sendone(argv[1], &result, &rlen);
+    if (got_fault || rc < 0 || !result) {
         fprintf(stderr, "Failed sending message to VMware.\n");
         free(result);
         return 1;
     }
-    if (len < 0 || !result) return 1;
 
     /*
-     * Reply format: "1 <value>" = success, "0 <msg>" = failure
-     * We print only the value part (after "1 "), matching open-vm-tools behaviour.
+     * VMware reply: "1 <value>" = success, "0 <error>" = failure.
+     * Print value only (drop "1 " prefix), matching open-vm-tools behaviour.
      */
-    if (len >= 2 && result[0] == '1' && result[1] == ' ') {
+    if (rlen >= 2 && result[0] == '1' && result[1] == ' ') {
         printf("%s\n", result + 2);
         free(result);
         return 0;
     }
 
-    /* Property not set or error — exit non-zero, print nothing */
     free(result);
     return 1;
 }
