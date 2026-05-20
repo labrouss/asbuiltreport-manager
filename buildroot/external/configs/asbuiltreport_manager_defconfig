@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-20-b02 (inittab fix in post-build + vsock priv port)
+# Cache-bust: 2026-05-20-b03 (vmware-tools container + inittab fix + .profile)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #

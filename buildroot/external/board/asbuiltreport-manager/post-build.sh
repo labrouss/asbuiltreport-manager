@@ -93,8 +93,8 @@ cat > "${TARGET_DIR}/etc/inittab" << 'EOF'
 
 tty1::sysinit:/etc/init.d/rcS
 
-# VGA console login
-tty1::respawn:/sbin/getty -n -l /sbin/login 38400 tty1
+# VGA console login — -L flag: no carrier detect, ansi for colour support
+tty1::respawn:/sbin/getty -L tty1 115200 ansi
 
 # Serial console
 ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100

@@ -1,58 +1,18 @@
 #!/bin/sh
-# vmware-rpctool — minimal VMware GuestInfo reader
-# Reads OVF/guestinfo properties using the VMware hypervisor backdoor.
-# This replaces open-vm-tools for musl-based builds.
-#
-# The VMware backdoor is accessible at I/O port 0x5658 (magic: 0x564D5868 'VMXh')
-# We use the kernel's vmw_backdoor character device when available (/dev/vmw_backdoor)
-# or fall back to reading the OVF XML from the VMware GuestInfo channel.
-#
-# For OVF properties, VMware also makes them available via:
-#   guestinfo.ovfenv  — the full OVF XML environment document
-#   guestinfo.<key>   — individual property values
+# vmware-rpctool — delegates to open-vm-tools inside the vmware-tools container
+# The container runs with privileged + host PID which gives it real VMware
+# backdoor access that works on ESXi even when the host kernel restricts IOPL.
 
-CMD="$*"
-KEY=$(printf '%s\n' "$CMD" | sed 's/.*guestinfo\.//')
+CONTAINER="asbuiltreport-vmware-tools"
 
-# ── Method 1: Use vmware-rpctool from open-vm-tools if installed ──────────────
+# Check if container is running
+if docker inspect --format='{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true; then
+    exec docker exec "$CONTAINER" vmware-rpctool "$@"
+fi
+
+# Container not ready — try the compiled binary as fallback
 if [ -x /usr/bin/vmware-rpctool ]; then
-    /usr/bin/vmware-rpctool "$CMD"
-    exit $?
+    exec /usr/bin/vmware-rpctool "$@"
 fi
 
-# ── Method 2: Read from VMware GuestInfo via /dev/vmw_backdoor ───────────────
-# The vmw_backdoor kernel module (CONFIG_VMWARE_BACKDOOR) exposes this device
-if [ -c /dev/vmw_backdoor ]; then
-    # The VMWARE_CMD_GETGUEST_INFO ioctl would go here
-    # For now fall through to method 3
-    :
-fi
-
-# ── Method 3: Read OVF environment from VMware's EFI variable ────────────────
-# VMware injects guestinfo as EFI variables on EFI-booted VMs
-EFIVAR_BASE="/sys/firmware/efi/efivars"
-if [ -d "$EFIVAR_BASE" ]; then
-    # Search for matching EFI variable (format: guestinfo.key-{GUID})
-    for f in "${EFIVAR_BASE}/guestinfo.${KEY}"-*; do
-        [ -f "$f" ] || continue
-        # Skip 4-byte EFI attribute header
-        VALUE=$(dd if="$f" bs=1 skip=4 2>/dev/null | tr -d '\0')
-        [ -n "$VALUE" ] && printf '%s' "$VALUE" && exit 0
-    done
-    # Try full OVF env
-    for f in "${EFIVAR_BASE}/guestinfo.ovfenv"-*; do
-        [ -f "$f" ] || continue
-        XML=$(dd if="$f" bs=1 skip=4 2>/dev/null)
-        VALUE=$(printf '%s' "$XML" | grep -o "key=\"${KEY}\" oe:value=\"[^\"]*\"" \
-                | sed 's/.*oe:value="\([^"]*\)"/\1/' | head -1)
-        [ -n "$VALUE" ] && printf '%s' "$VALUE" && exit 0
-    done
-fi
-
-# ── Method 4: Read from /sys/class/dmi for basic system info ─────────────────
-case "$KEY" in
-    hostname) cat /sys/class/dmi/id/hostname 2>/dev/null && exit 0 ;;
-esac
-
-# Property not available
 exit 1

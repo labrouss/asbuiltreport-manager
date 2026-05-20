@@ -1,10 +1,22 @@
 # =============================================================================
 # AsBuiltReport Manager — Docker Compose stack
-# Deployed at: /etc/docker/compose/asbuiltreport-manager/docker-compose.yml
 # =============================================================================
 name: asbuiltreport-manager
 
 services:
+
+  # ── VMware Tools: open-vm-tools for guestinfo/OVF property access ─────────
+  # Started first. The host's /usr/local/bin/vmware-rpctool delegates here.
+  # Requires privileged mode + host PID namespace for VMware backdoor access.
+  vmware-tools:
+    image: asbuiltreport-vmware-tools:latest
+    container_name: asbuiltreport-vmware-tools
+    restart: unless-stopped
+    privileged: true
+    pid: host
+    network_mode: host
+    volumes:
+      - /var/run:/var/run
 
   # ── App container: Express API + React frontend ──────────────────────────
   app:

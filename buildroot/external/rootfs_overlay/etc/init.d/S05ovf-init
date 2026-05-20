@@ -63,10 +63,28 @@ get_ovfenv_from_efi() {
 }
 
 # ── Main property reader ───────────────────────────────────────────────────
+wait_for_vmware_tools() {
+    # Wait up to 30s for the vmware-tools container to be ready
+    local i=0
+    while [ $i -lt 15 ]; do
+        if docker inspect --format='{{.State.Running}}'            asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
+            return 0
+        fi
+        sleep 2; i=$((i+1))
+    done
+    return 1
+}
+
 get_guestinfo() {
     local key="$1" val=""
 
-    # Try direct backdoor first
+    # Try via vmware-tools container first (privileged, has real backdoor access)
+    if docker inspect --format='{{.State.Running}}'        asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
+        val=$(docker exec asbuiltreport-vmware-tools vmware-rpctool               "info-get guestinfo.${key}" 2>/dev/null)
+        [ -n "$val" ] && printf '%s' "$val" && return 0
+    fi
+
+    # Try direct backdoor (may not work on ESXi without privileged container)
     val=$(get_via_backdoor "$key")
     [ -n "$val" ] && printf '%s' "$val" && return 0
 

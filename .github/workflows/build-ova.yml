@@ -198,6 +198,14 @@ jobs:
           docker save ${APP_IMAGE}:latest | gzip > "${IMAGES_DIR}/${APP_IMAGE}.tar.gz"
           echo "  $(du -sh ${IMAGES_DIR}/${APP_IMAGE}.tar.gz | cut -f1)  ← ${APP_IMAGE}.tar.gz"
 
+      - name: Build vmware-tools image
+        run: |
+          echo "Building vmware-tools image..."
+          docker build -t asbuiltreport-vmware-tools:latest ./vmware-tools/
+          mkdir -p "${IMAGES_DIR}"
+          docker save asbuiltreport-vmware-tools:latest | gzip > "${IMAGES_DIR}/asbuiltreport-vmware-tools.tar.gz"
+          echo "vmware-tools image: $(du -sh ${IMAGES_DIR}/asbuiltreport-vmware-tools.tar.gz)"
+
       - name: Save worker image to tarball
         if: ${{ github.event.inputs.skip_worker_rebuild != 'true' }}
         run: |
