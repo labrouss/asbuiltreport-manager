@@ -122,6 +122,7 @@ CONFIG_DRM_FBDEV_EMULATION=y
 
 # ── VMware backdoor / VMCI (required for OVF property reading without open-vm-tools)
 CONFIG_VMWARE_VMCI=y
+CONFIG_VSOCKETS=y
 CONFIG_VMWARE_VMCI_VSOCKETS=y
 CONFIG_VMWARE_BALLOON=y
 
