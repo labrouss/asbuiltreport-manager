@@ -84,6 +84,7 @@ install -d -m 0755 "${TARGET_DIR}/boot/efi"
 
 # =============================================================================
 # 5. Write /etc/inittab — tty1::sysinit routes boot output to VGA console
+# Updated: 2026-05-20-b04
 # =============================================================================
 cat > "${TARGET_DIR}/etc/inittab" << 'EOF'
 # /etc/inittab — busybox init

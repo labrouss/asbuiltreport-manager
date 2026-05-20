@@ -401,6 +401,16 @@ jobs:
           grep -E "^BR2_(x86_64|TOOLCHAIN_EXTERNAL|LINUX_KERNEL_CUSTOM_VERSION_VALUE|TARGET_ROOTFS_EXT2_SIZE|PACKAGE_DOCKER|PACKAGE_OPEN_VM)" \
             output/.config | sort
 
+          # Verify inittab in built rootfs has no abr-console respawn
+          echo "Verifying inittab..."
+          if grep -q "abr-console" output/target/etc/inittab 2>/dev/null; then
+            echo "ERROR: inittab still contains abr-console respawn!"
+            cat output/target/etc/inittab
+            exit 1
+          fi
+          echo "inittab OK: $(grep -c '::' output/target/etc/inittab) entries"
+          cat output/target/etc/inittab
+
       # -- CACHE HIT: re-run post-scripts only (~3 min) -------------------------
       #
       # The full build is cached. rootfs.ext2 (built by Buildroot's fakeroot

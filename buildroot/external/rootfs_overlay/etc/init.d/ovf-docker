@@ -1,0 +1,89 @@
+#!/bin/sh
+# /etc/init.d/S41ovf-docker
+# Reads OVF properties via the vmware-tools container (privileged, glibc).
+# Runs AFTER S30docker and S40asbuiltreport so the container is available.
+# Applies any configuration that S05ovf-init couldn't read without the container.
+
+SENTINEL="/var/lib/asbuiltreport/.ovf-docker-done"
+OVF_PROPS="/var/lib/asbuiltreport/ovf-props.env"
+
+case "$1" in
+  start)
+    [ -f "$SENTINEL" ] && exit 0
+
+    echo "Reading OVF properties via vmware-tools container..."
+
+    # Wait for vmware-tools container
+    i=0
+    while [ $i -lt 15 ]; do
+        docker inspect --format='{{.State.Running}}' \
+            asbuiltreport-vmware-tools 2>/dev/null | grep -q true && break
+        sleep 2; i=$((i+1))
+    done
+
+    if ! docker inspect --format='{{.State.Running}}' \
+         asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
+        echo "  vmware-tools container not available, skipping"
+        exit 0
+    fi
+
+    rpc() { docker exec asbuiltreport-vmware-tools vmware-rpctool \
+            "info-get guestinfo.$1" 2>/dev/null; }
+
+    HOSTNAME=$(rpc hostname)
+    IP_CIDR=$(rpc ipaddress)
+    GATEWAY=$(rpc gateway)
+    DNS=$(rpc dns)
+    PASSWORD=$(rpc password)
+    SSH_KEY=$(rpc ssh_authorized_key)
+
+    # Save for reference
+    mkdir -p "$(dirname $OVF_PROPS)"
+    cat > "$OVF_PROPS" << EOF
+HOSTNAME=${HOSTNAME}
+IP_CIDR=${IP_CIDR}
+GATEWAY=${GATEWAY}
+DNS=${DNS}
+EOF
+
+    # Apply hostname
+    if [ -n "$HOSTNAME" ]; then
+        echo "$HOSTNAME" > /etc/hostname
+        hostname "$HOSTNAME"
+        echo "  hostname: $HOSTNAME"
+    fi
+
+    # Apply static network if not already set
+    if [ -n "$IP_CIDR" ] && ! ip addr show eth0 2>/dev/null | grep -q "$IP_CIDR"; then
+        /etc/init.d/S10network restart 2>/dev/null || true
+        echo "  network: $IP_CIDR"
+    fi
+
+    # Apply password (first boot only)
+    if [ -n "$PASSWORD" ]; then
+        echo "root:$PASSWORD" | chpasswd
+        chage -d 0 root 2>/dev/null || passwd -e root 2>/dev/null || true
+        /etc/init.d/S50ttyd start 2>/dev/null || true
+        echo "  password: configured"
+    fi
+
+    # Apply SSH key
+    if [ -n "$SSH_KEY" ]; then
+        mkdir -p /root/.ssh && chmod 700 /root/.ssh
+        grep -qF "$SSH_KEY" /root/.ssh/authorized_keys 2>/dev/null || \
+            echo "$SSH_KEY" >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+    fi
+
+    # Start vmtoolsd heartbeat in the container for vCenter IP reporting
+    docker exec asbuiltreport-vmware-tools \
+        sh -c 'vmtoolsd --background /var/run/vmtoolsd.pid 2>/dev/null; true' \
+        2>/dev/null || true
+
+    mkdir -p "$(dirname $SENTINEL)"
+    touch "$SENTINEL"
+    echo "OVF docker init complete."
+    ;;
+  stop) ;;
+  *) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac
