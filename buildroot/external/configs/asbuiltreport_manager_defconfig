@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-19-b11 (force vmware-rpctool rebuild + IKCONFIG)
+# Cache-bust: 2026-05-20-b01 (inittab tty1 + vsock bind + wizard)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #
