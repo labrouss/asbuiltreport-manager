@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-20-b08 (remove S99console inittab injection)
+# Cache-bust: 2026-05-20-b09 (OVF required=true guestInfo-only + S05ovf-init restore)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #

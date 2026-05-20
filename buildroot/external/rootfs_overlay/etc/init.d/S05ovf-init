@@ -1,184 +1,83 @@
 #!/bin/sh
 # /etc/init.d/S05ovf-init
-# Reads VMware OVF properties and configures the system.
-# Tries multiple delivery methods in order of reliability.
+# Reads OVF guestinfo properties and pre-configures the appliance.
+# Runs early (position 05) for hostname/network, and again post-Docker (via
+# S40asbuiltreport) using the privileged vmware-tools container for password/SSH.
+# If no properties are available, the first-login wizard (abr-setup) handles setup.
 
 SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
-OVF_XML_CACHE="/run/ovf-environment.xml"
 
-# ── Parse a property from OVF environment XML ─────────────────────────────
-parse_ovf_xml() {
-    local xml="$1" key="$2"
-    # Handles: oe:key="hostname" oe:value="val"
-    #      and: key="hostname" value="val"
-    printf '%s' "$xml" | grep -o "key=\"${key}\" [a-z:]*value=\"[^\"]*\"" \
-        | sed 's/.*value="\([^"]*\)"/\1/' | head -1
-}
-
-# ── Method 1: VMware backdoor RPC (vmware-rpctool) ────────────────────────
-get_via_backdoor() {
-    local key="$1"
-    command -v vmware-rpctool >/dev/null 2>&1 || return 1
-    vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null
-}
-
-# ── Method 2: OVF environment XML via guestinfo.ovfenv ───────────────────
-get_ovfenv_xml() {
-    command -v vmware-rpctool >/dev/null 2>&1 || return 1
-    vmware-rpctool "info-get guestinfo.ovfenv" 2>/dev/null
-}
-
-# ── Method 3: OVF environment from mounted CD-ROM/ISO ────────────────────
-# VMware can deliver OVF properties as an ISO mounted as a CD-ROM.
-# The ISO contains a file named "ovf-env.xml" at the root.
-get_ovfenv_from_cdrom() {
-    local xml=""
-    for dev in /dev/sr0 /dev/cdrom /dev/dvd; do
-        [ -b "$dev" ] || continue
-        # Try to mount temporarily
-        mkdir -p /mnt/ovfenv
-        if mount -o ro "$dev" /mnt/ovfenv 2>/dev/null; then
-            for f in /mnt/ovfenv/ovf-env.xml /mnt/ovfenv/ovf-environment.xml \
-                     /mnt/ovfenv/OVF-ENV.XML; do
-                [ -f "$f" ] && xml=$(cat "$f") && break
-            done
-            umount /mnt/ovfenv 2>/dev/null
-            [ -n "$xml" ] && printf '%s' "$xml" && return 0
-        fi
-    done
-    return 1
-}
-
-# ── Method 4: OVF environment from EFI variables ─────────────────────────
-get_ovfenv_from_efi() {
-    local base="/sys/firmware/efi/efivars"
-    [ -d "$base" ] || return 1
-    # VMware injects as guestinfo.ovfenv-{GUID} EFI variable
-    for f in "$base"/guestinfo.ovfenv-*; do
-        [ -f "$f" ] || continue
-        # Skip 4-byte EFI attribute header
-        dd if="$f" bs=1 skip=4 2>/dev/null && return 0
-    done
-    return 1
-}
-
-# ── Main property reader ───────────────────────────────────────────────────
-wait_for_vmware_tools() {
-    # Wait up to 30s for the vmware-tools container to be ready
-    local i=0
-    while [ $i -lt 15 ]; do
-        if docker inspect --format='{{.State.Running}}'            asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
-            return 0
-        fi
-        sleep 2; i=$((i+1))
-    done
-    return 1
-}
-
+# ── Read a guestinfo property ──────────────────────────────────────────────
 get_guestinfo() {
-    local key="$1" val=""
+    local key="$1"
 
-    # Try via vmware-tools container first (privileged, has real backdoor access)
-    if docker inspect --format='{{.State.Running}}'        asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
-        val=$(docker exec asbuiltreport-vmware-tools vmware-rpctool               "info-get guestinfo.${key}" 2>/dev/null)
-        [ -n "$val" ] && printf '%s' "$val" && return 0
+    # Via privileged Docker container (works on ESXi, needs Docker running)
+    if command -v docker >/dev/null 2>&1; then
+        if docker inspect --format='{{.State.Running}}' \
+           asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
+            docker exec asbuiltreport-vmware-tools \
+                vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null
+            return
+        fi
     fi
 
-    # Try direct backdoor (may not work on ESXi without privileged container)
-    val=$(get_via_backdoor "$key")
-    [ -n "$val" ] && printf '%s' "$val" && return 0
-
-    # Use cached OVF XML if available
-    if [ -f "$OVF_XML_CACHE" ]; then
-        val=$(parse_ovf_xml "$(cat "$OVF_XML_CACHE")" "$key")
-        [ -n "$val" ] && printf '%s' "$val" && return 0
+    # Direct vmware-rpctool (may work on some ESXi configs)
+    if command -v vmware-rpctool >/dev/null 2>&1; then
+        vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null
     fi
-
-    # Try to get the full OVF XML from all sources and cache it
-    local xml=""
-    xml=$(get_ovfenv_xml)
-    [ -z "$xml" ] && xml=$(get_ovfenv_from_cdrom)
-    [ -z "$xml" ] && xml=$(get_ovfenv_from_efi)
-
-    if [ -n "$xml" ]; then
-        printf '%s' "$xml" > "$OVF_XML_CACHE"
-        val=$(parse_ovf_xml "$xml" "$key")
-        [ -n "$val" ] && printf '%s' "$val" && return 0
-    fi
-
-    return 1
 }
 
 case "$1" in
   start)
-    echo "Reading OVF properties..."
-
     HOSTNAME=$(get_guestinfo hostname)
     IP_CIDR=$(get_guestinfo ipaddress)
     GATEWAY=$(get_guestinfo gateway)
-    DNS_SERVERS=$(get_guestinfo dns)
+    DNS=$(get_guestinfo dns)
     PASSWORD=$(get_guestinfo password)
     SSH_KEY=$(get_guestinfo ssh_authorized_key)
 
-    # Apply hostname
+    # Apply hostname (even if no other properties set)
     if [ -n "$HOSTNAME" ]; then
         echo "$HOSTNAME" > /etc/hostname
         hostname "$HOSTNAME"
-        echo "  hostname: $HOSTNAME"
+        echo "OVF: hostname=$HOSTNAME"
     fi
 
-    # Write network config for S10network to consume
+    # Write network config for S10network
     if [ -n "$IP_CIDR" ]; then
         mkdir -p /etc/network
-        cat > /etc/network/ovf-config << EOF
+        cat > /etc/network/config << EOF
 INTERFACE=eth0
+MODE=static
 IP_CIDR=$IP_CIDR
 GATEWAY=${GATEWAY:-}
-DNS=${DNS_SERVERS:-}
+DNS=${DNS:-8.8.8.8}
 EOF
-        echo "  network: $IP_CIDR gw=${GATEWAY:-dhcp}"
+        echo "OVF: network=$IP_CIDR"
     fi
 
-    # One-time setup (password, SSH key)
+    # One-time: password + SSH key
     if [ ! -f "$SENTINEL" ]; then
         if [ -n "$PASSWORD" ]; then
             echo "root:$PASSWORD" | chpasswd
-            chage -d 0 root 2>/dev/null || passwd -e root 2>/dev/null || true
+            # Mark setup done so wizard doesn't override it
+            mkdir -p "$(dirname $SENTINEL)"
+            touch "$SENTINEL"
             /etc/init.d/S50ttyd start 2>/dev/null || true
-            echo "  password: set (change required on first login)"
+            echo "OVF: password configured"
         fi
-
         if [ -n "$SSH_KEY" ]; then
-            mkdir -p /root/.ssh
-            chmod 700 /root/.ssh
+            mkdir -p /root/.ssh && chmod 700 /root/.ssh
             echo "$SSH_KEY" >> /root/.ssh/authorized_keys
             chmod 600 /root/.ssh/authorized_keys
-            echo "  ssh key: installed"
-        fi
-
-        mkdir -p "$(dirname $SENTINEL)"
-        touch "$SENTINEL"
-    fi
-
-    # If no OVF properties were found and first boot, launch setup wizard
-    # on the VGA console (tty1) in background — waits for user login
-    if [ ! -f "$SENTINEL" ]; then
-        # No properties from any source — schedule wizard on tty1
-        if [ -z "$HOSTNAME$IP_CIDR$PASSWORD" ]; then
-            echo "OVF properties not available — setup wizard will run on console login."
-            # Write a profile.d hook so wizard runs after first login on tty1
-            cat > /etc/profile.d/first-boot-wizard.sh << 'WIZARD_HOOK'
-#!/bin/sh
-if [ ! -f /var/lib/asbuiltreport/.ovf-init-done ]; then
-    /usr/local/bin/abr-setup-wizard
-    rm -f /etc/profile.d/first-boot-wizard.sh
-fi
-WIZARD_HOOK
-            chmod +x /etc/profile.d/first-boot-wizard.sh
+            echo "OVF: SSH key installed"
         fi
     fi
 
-    echo "OVF init complete."
+    # If nothing was readable, wizard will run on first login
+    if [ -z "$HOSTNAME$IP_CIDR$PASSWORD" ]; then
+        echo "OVF: no properties available — setup wizard will run on first login"
+    fi
     ;;
   stop) ;;
   *) echo "Usage: $0 {start|stop}"; exit 1 ;;
