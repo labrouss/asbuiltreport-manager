@@ -1,12 +1,11 @@
-# /root/.profile
+# /root/.profile — runs on login
 
-# Run first-boot setup wizard if OVF init hasn't completed
-if [ ! -f /var/lib/asbuiltreport/.ovf-init-done ] && \
-   [ -x /usr/local/bin/abr-setup-wizard ]; then
-    /usr/local/bin/abr-setup-wizard
+# First-boot setup wizard (runs once, skipped after sentinel is set)
+if [ -x /usr/local/bin/abr-setup ]; then
+    /usr/local/bin/abr-setup
 fi
 
-# Launch console menu on tty1 only, and only once (not recursively)
+# Appliance console menu (tty1 only, no recursion)
 if [ "$(tty)" = "/dev/tty1" ] && \
    [ -z "$ABR_CONSOLE_RUNNING" ] && \
    [ -x /usr/local/bin/abr-console ]; then

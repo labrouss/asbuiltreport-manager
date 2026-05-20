@@ -1,0 +1,132 @@
+#!/bin/sh
+# abr-setup — First-login configuration wizard
+# Runs automatically on first login, can be re-run with: abr-setup
+
+SENTINEL="/var/lib/asbuiltreport/.setup-done"
+W=60
+H=18
+
+# Use whiptail if available, otherwise plain text
+has_whiptail() { command -v whiptail >/dev/null 2>&1; }
+
+ask() {
+    # ask <prompt> <default>
+    printf "%s [%s]: " "$1" "$2"
+    read -r val
+    printf '%s' "${val:-$2}"
+}
+
+askpass() {
+    while true; do
+        printf "Password: "
+        stty -echo; read -r p1; stty echo; echo
+        printf "Confirm:  "
+        stty -echo; read -r p2; stty echo; echo
+        if [ "$p1" = "$p2" ] && [ -n "$p1" ]; then
+            printf '%s' "$p1"; return
+        fi
+        echo "Passwords don't match or empty — try again."
+    done
+}
+
+run_wizard() {
+    clear
+    cat << 'BANNER'
+  ╔══════════════════════════════════════════════════╗
+  ║     AsBuiltReport Manager — First Boot Setup    ║
+  ╚══════════════════════════════════════════════════╝
+BANNER
+    echo ""
+    echo "This wizard configures hostname, network, and password."
+    echo "Press Enter to accept defaults shown in [brackets]."
+    echo ""
+
+    # ── Hostname ──────────────────────────────────────────────────────────
+    CURRENT_HOST=$(hostname)
+    HOSTNAME=$(ask "Hostname" "${CURRENT_HOST:-asbuiltreport-manager}")
+    echo "$HOSTNAME" > /etc/hostname
+    hostname "$HOSTNAME"
+
+    # ── Network ───────────────────────────────────────────────────────────
+    echo ""
+    CURRENT_IP=$(ip -4 addr show eth0 scope global 2>/dev/null \
+                 | grep -oE 'inet [0-9./]+' | cut -d' ' -f2 | head -1)
+    echo "Current IP: ${CURRENT_IP:-DHCP (not yet assigned)}"
+    echo "Network: (1) Keep DHCP  (2) Set static IP"
+    printf "Choice [1]: "
+    read -r NET
+    NET="${NET:-1}"
+
+    if [ "$NET" = "2" ]; then
+        IP=$(ask "IP/prefix (e.g. 192.168.1.10/24)" "")
+        GW=$(ask "Gateway" "")
+        DNS=$(ask "DNS server" "8.8.8.8")
+
+        if [ -n "$IP" ]; then
+            # Write config for S10network to apply on next reboot
+            # Also apply immediately
+            ETH="eth0"
+            ip addr flush dev "$ETH" 2>/dev/null
+            ip addr add "$IP" dev "$ETH" 2>/dev/null
+            ip link set "$ETH" up 2>/dev/null
+            [ -n "$GW" ] && ip route add default via "$GW" dev "$ETH" 2>/dev/null
+            [ -n "$DNS" ] && echo "nameserver $DNS" > /etc/resolv.conf
+
+            mkdir -p /etc/network
+            cat > /etc/network/config << EOF
+INTERFACE=eth0
+MODE=static
+IP_CIDR=$IP
+GATEWAY=$GW
+DNS=$DNS
+EOF
+            echo "  Static IP applied: $IP"
+        fi
+    fi
+
+    # ── Root password ─────────────────────────────────────────────────────
+    echo ""
+    echo "Set root password (required for SSH and web console access):"
+    passwd root
+
+    # ── SSH public key (optional) ─────────────────────────────────────────
+    echo ""
+    printf "SSH public key (paste or press Enter to skip): "
+    read -r SSHKEY
+    if [ -n "$SSHKEY" ]; then
+        mkdir -p /root/.ssh && chmod 700 /root/.ssh
+        echo "$SSHKEY" >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+        echo "  SSH key added."
+    fi
+
+    # ── Start ttyd now that password is set ───────────────────────────────
+    /etc/init.d/S50ttyd start 2>/dev/null || true
+
+    # ── Done ──────────────────────────────────────────────────────────────
+    mkdir -p "$(dirname $SENTINEL)"
+    touch "$SENTINEL"
+
+    IP_NOW=$(ip -4 addr show eth0 scope global 2>/dev/null \
+             | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
+    echo ""
+    echo "  ┌─────────────────────────────────────────────┐"
+    echo "  │  Setup complete!                            │"
+    echo "  │                                             │"
+    printf "  │  Web UI:  http://%-26s│\n" "${IP_NOW:-<ip>}:3001"
+    printf "  │  Console: https://%-25s│\n" "${IP_NOW:-<ip>}:8443"
+    printf "  │  SSH:     ssh root@%-24s│\n" "${IP_NOW:-<ip>}"
+    echo "  └─────────────────────────────────────────────┘"
+    echo ""
+    printf "Press Enter to continue..."
+    read -r _
+}
+
+case "$1" in
+  --force) rm -f "$SENTINEL" ;;
+esac
+
+[ -f "$SENTINEL" ] && exit 0
+[ ! -t 0 ] && exit 0   # not interactive
+
+run_wizard
