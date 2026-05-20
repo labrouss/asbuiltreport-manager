@@ -68,14 +68,27 @@ static int vsock_send_recv(const char *request, char **reply, uint32_t *replylen
             return -1;
         }
 
-        /* ESXi 7+ requires the guest to bind a local port before connecting.
-         * Without bind(), the hypervisor resets the connection immediately. */
+        /* ESXi requires the guest to connect FROM a privileged source port
+         * (< 1024) for the RPCI channel. Without this, the hypervisor sends
+         * RST immediately. We bind to a low port before connecting. */
         struct sockaddr_vm local = {0};
         local.svm_family = AF_VSOCK;
         local.svm_cid    = VMADDR_CID_ANY;
-        local.svm_port   = VMADDR_PORT_ANY;
-        if (bind(fd, (struct sockaddr *)&local, sizeof local) < 0) {
-            DBG("vsock bind failed: %s\n", strerror(errno));
+        /* Try privileged ports 900-1023 until one binds */
+        int bound = 0;
+        for (unsigned int lport = 900; lport < 1024; lport++) {
+            local.svm_port = lport;
+            if (bind(fd, (struct sockaddr *)&local, sizeof local) == 0) {
+                DBG("vsock bound local port %u\n", lport);
+                bound = 1;
+                break;
+            }
+        }
+        if (!bound) {
+            /* Fall back to any port */
+            local.svm_port = VMADDR_PORT_ANY;
+            bind(fd, (struct sockaddr *)&local, sizeof local);
+            DBG("vsock bound to any port\n");
         }
 
         addr.svm_family = AF_VSOCK;

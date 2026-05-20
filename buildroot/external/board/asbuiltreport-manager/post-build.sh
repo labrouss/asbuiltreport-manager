@@ -83,30 +83,31 @@ EOF
 install -d -m 0755 "${TARGET_DIR}/boot/efi"
 
 # =============================================================================
-# 5. Write /etc/inittab — busybox init with proper mounts before rcS
+# 5. Write /etc/inittab — tty1::sysinit routes boot output to VGA console
 # =============================================================================
 cat > "${TARGET_DIR}/etc/inittab" << 'EOF'
 # /etc/inittab — busybox init
+#
+# tty1::sysinit routes rcS output to the VGA framebuffer so all boot
+# messages are visible in VMRC without a serial connection.
 
-# sysinit: mount filesystems and run S* scripts
-::sysinit:/etc/init.d/rcS
+tty1::sysinit:/etc/init.d/rcS
 
-# Respawn management console on tty1
-tty1::respawn:/usr/local/bin/abr-console.sh
+# VGA console login
+tty1::respawn:/sbin/getty -n -l /sbin/login 38400 tty1
 
-# Serial console on ttyS0
+# Serial console
 ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100
 
 # Ctrl-Alt-Del
 ::ctrlaltdel:/sbin/reboot
 
 # Shutdown
-::shutdown:/etc/init.d/S40asbuiltreport stop
-::shutdown:/etc/init.d/S30docker stop
+tty1::shutdown:/etc/init.d/rcK
 ::shutdown:/bin/umount -a -r
+::shutdown:/sbin/swapoff -a
 EOF
 
-# =============================================================================
 # 6. Write /etc/init.d/rcS — mounts first, then S* scripts
 # =============================================================================
 cat > "${TARGET_DIR}/etc/init.d/rcS" << 'EOF'
