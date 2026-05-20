@@ -142,6 +142,24 @@ EOF
         touch "$SENTINEL"
     fi
 
+    # If no OVF properties were found and first boot, launch setup wizard
+    # on the VGA console (tty1) in background — waits for user login
+    if [ ! -f "$SENTINEL" ]; then
+        # No properties from any source — schedule wizard on tty1
+        if [ -z "$HOSTNAME$IP_CIDR$PASSWORD" ]; then
+            echo "OVF properties not available — setup wizard will run on console login."
+            # Write a profile.d hook so wizard runs after first login on tty1
+            cat > /etc/profile.d/first-boot-wizard.sh << 'WIZARD_HOOK'
+#!/bin/sh
+if [ ! -f /var/lib/asbuiltreport/.ovf-init-done ]; then
+    /usr/local/bin/abr-setup-wizard
+    rm -f /etc/profile.d/first-boot-wizard.sh
+fi
+WIZARD_HOOK
+            chmod +x /etc/profile.d/first-boot-wizard.sh
+        fi
+    fi
+
     echo "OVF init complete."
     ;;
   stop) ;;

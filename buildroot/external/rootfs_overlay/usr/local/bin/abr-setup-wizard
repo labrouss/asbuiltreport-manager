@@ -1,0 +1,189 @@
+#!/bin/sh
+# abr-setup-wizard — First-boot configuration wizard
+# Called by S05ovf-init when OVF properties are unavailable.
+# Uses whiptail for a guided TUI setup of hostname, network, password.
+
+SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
+
+# Detect if we have a real terminal
+has_tty() { [ -t 0 ] && [ -t 1 ]; }
+
+# Detect whiptail or dialog
+TUI=""
+command -v whiptail >/dev/null 2>&1 && TUI="whiptail"
+command -v dialog   >/dev/null 2>&1 && [ -z "$TUI" ] && TUI="dialog"
+
+# ── Plain text fallback ────────────────────────────────────────────────────
+plain_setup() {
+    echo ""
+    echo "════════════════════════════════════════════════════"
+    echo "   AsBuiltReport Manager — First Boot Setup"
+    echo "════════════════════════════════════════════════════"
+    echo ""
+    echo "OVF properties were not available. Please configure"
+    echo "this appliance manually."
+    echo ""
+
+    # Hostname
+    CURRENT_HOST=$(hostname)
+    printf "Hostname [%s]: " "$CURRENT_HOST"
+    read -r INPUT_HOST
+    HOSTNAME="${INPUT_HOST:-$CURRENT_HOST}"
+
+    # Network
+    CURRENT_IP=$(ip -4 addr show eth0 scope global 2>/dev/null | grep -oE 'inet [0-9./]+' | cut -d' ' -f2 | head -1)
+    echo ""
+    echo "Network configuration:"
+    echo "  1) DHCP (current: ${CURRENT_IP:-not assigned})"
+    echo "  2) Static IP"
+    printf "Choice [1]: "
+    read -r NET_CHOICE
+    NET_CHOICE="${NET_CHOICE:-1}"
+
+    IP_CIDR="" GATEWAY="" DNS=""
+    if [ "$NET_CHOICE" = "2" ]; then
+        printf "IP address (CIDR, e.g. 192.168.1.10/24): "
+        read -r IP_CIDR
+        printf "Gateway: "
+        read -r GATEWAY
+        printf "DNS server [8.8.8.8]: "
+        read -r DNS
+        DNS="${DNS:-8.8.8.8}"
+    fi
+
+    # Password
+    echo ""
+    echo "Set root password (required for SSH and web console):"
+    passwd root
+
+    # SSH key
+    echo ""
+    printf "Paste SSH public key (or press Enter to skip): "
+    read -r SSH_KEY
+
+    apply_config "$HOSTNAME" "$IP_CIDR" "$GATEWAY" "$DNS" "$SSH_KEY"
+}
+
+# ── Whiptail TUI ───────────────────────────────────────────────────────────
+tui_setup() {
+    local T="$TUI"
+    local TITLE="AsBuiltReport Manager — First Boot Setup"
+    local H=20 W=70
+
+    # Welcome
+    $T --title "$TITLE" --msgbox \
+        "OVF properties were not available.\n\nThis wizard will help you configure the appliance.\n\nPress OK to continue." \
+        $H $W 2>/dev/tty
+
+    # Hostname
+    HOSTNAME=$($T --title "$TITLE" --inputbox \
+        "Enter hostname for this appliance:" $H $W \
+        "asbuiltreport-manager" 3>&1 1>&2 2>&3) || return 1
+
+    # Network type
+    NET_TYPE=$($T --title "$TITLE" --menu \
+        "Network configuration:" $H $W 2 \
+        "dhcp"   "Use DHCP (automatic)" \
+        "static" "Use static IP address" \
+        3>&1 1>&2 2>&3) || return 1
+
+    IP_CIDR="" GATEWAY="" DNS=""
+    if [ "$NET_TYPE" = "static" ]; then
+        IP_CIDR=$($T --title "$TITLE" --inputbox \
+            "IP address with prefix (e.g. 192.168.1.10/24):" $H $W "" \
+            3>&1 1>&2 2>&3) || return 1
+        GATEWAY=$($T --title "$TITLE" --inputbox \
+            "Default gateway:" $H $W "" \
+            3>&1 1>&2 2>&3) || return 1
+        DNS=$($T --title "$TITLE" --inputbox \
+            "DNS server:" $H $W "8.8.8.8" \
+            3>&1 1>&2 2>&3) || return 1
+    fi
+
+    # Password
+    while true; do
+        PASS1=$($T --title "$TITLE" --passwordbox \
+            "Set root password:" $H $W "" \
+            3>&1 1>&2 2>&3) || return 1
+        PASS2=$($T --title "$TITLE" --passwordbox \
+            "Confirm root password:" $H $W "" \
+            3>&1 1>&2 2>&3) || return 1
+        if [ "$PASS1" = "$PASS2" ]; then
+            [ -n "$PASS1" ] && echo "root:$PASS1" | chpasswd
+            break
+        fi
+        $T --title "$TITLE" --msgbox "Passwords do not match. Try again." 8 $W 2>/dev/tty
+    done
+
+    # SSH key (optional)
+    SSH_KEY=$($T --title "$TITLE" --inputbox \
+        "SSH public key (optional, press Enter to skip):" $H $W "" \
+        3>&1 1>&2 2>&3) || true
+
+    apply_config "$HOSTNAME" "$IP_CIDR" "$GATEWAY" "$DNS" "$SSH_KEY"
+}
+
+# ── Apply configuration ────────────────────────────────────────────────────
+apply_config() {
+    local HOSTNAME="$1" IP_CIDR="$2" GATEWAY="$3" DNS="$4" SSH_KEY="$5"
+
+    # Hostname
+    if [ -n "$HOSTNAME" ]; then
+        echo "$HOSTNAME" > /etc/hostname
+        hostname "$HOSTNAME"
+    fi
+
+    # Network
+    if [ -n "$IP_CIDR" ]; then
+        mkdir -p /etc/network
+        cat > /etc/network/ovf-config << EOF
+INTERFACE=eth0
+IP_CIDR=$IP_CIDR
+GATEWAY=$GATEWAY
+DNS=$DNS
+EOF
+        /etc/init.d/S10network restart 2>/dev/null || true
+    fi
+
+    # SSH key
+    if [ -n "$SSH_KEY" ]; then
+        mkdir -p /root/.ssh && chmod 700 /root/.ssh
+        echo "$SSH_KEY" >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+    fi
+
+    # Start ttyd if password was set
+    if grep -q '^\$' /etc/shadow 2>/dev/null || \
+       ! grep -qE '^root:(\*|!|$)' /etc/shadow 2>/dev/null; then
+        /etc/init.d/S50ttyd start 2>/dev/null || true
+    fi
+
+    mkdir -p "$(dirname $SENTINEL)"
+    touch "$SENTINEL"
+
+    echo ""
+    echo "Configuration applied."
+    IP=$(ip -4 addr show scope global 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
+    echo "  Hostname : $(hostname)"
+    echo "  IP       : ${IP:-pending DHCP}"
+    echo "  Web UI   : http://${IP:-<ip>}:3001"
+    echo ""
+}
+
+# ── Entry point ────────────────────────────────────────────────────────────
+case "$1" in
+  --force) rm -f "$SENTINEL" ;;  # re-run even if already configured
+esac
+
+[ -f "$SENTINEL" ] && exit 0
+
+if ! has_tty; then
+    echo "abr-setup-wizard: no terminal available, skipping interactive setup"
+    exit 1
+fi
+
+if [ -n "$TUI" ]; then
+    tui_setup || plain_setup
+else
+    plain_setup
+fi

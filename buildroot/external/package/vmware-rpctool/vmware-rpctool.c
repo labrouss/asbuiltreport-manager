@@ -68,6 +68,16 @@ static int vsock_send_recv(const char *request, char **reply, uint32_t *replylen
             return -1;
         }
 
+        /* ESXi 7+ requires the guest to bind a local port before connecting.
+         * Without bind(), the hypervisor resets the connection immediately. */
+        struct sockaddr_vm local = {0};
+        local.svm_family = AF_VSOCK;
+        local.svm_cid    = VMADDR_CID_ANY;
+        local.svm_port   = VMADDR_PORT_ANY;
+        if (bind(fd, (struct sockaddr *)&local, sizeof local) < 0) {
+            DBG("vsock bind failed: %s\n", strerror(errno));
+        }
+
         addr.svm_family = AF_VSOCK;
         addr.svm_cid    = VMADDR_CID_HOST;
         addr.svm_port   = ports[i];
