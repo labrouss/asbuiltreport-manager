@@ -5,7 +5,7 @@
 #
 ################################################################################
 
-VMWARE_RPCTOOL_VERSION = 1.0
+VMWARE_RPCTOOL_VERSION = 1.1
 VMWARE_RPCTOOL_SITE = $(BR2_EXTERNAL_ASBUILTREPORT_MANAGER_PATH)/package/vmware-rpctool
 VMWARE_RPCTOOL_SITE_METHOD = local
 

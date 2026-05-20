@@ -1,38 +1,94 @@
 #!/bin/sh
 # /etc/init.d/S05ovf-init
-# Reads VMware guestinfo OVF properties and configures the system.
-# Runs every boot but only applies password/SSH key on first run.
+# Reads VMware OVF properties and configures the system.
+# Tries multiple delivery methods in order of reliability.
 
 SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
+OVF_XML_CACHE="/run/ovf-environment.xml"
 
-get_guestinfo() {
+# ── Parse a property from OVF environment XML ─────────────────────────────
+parse_ovf_xml() {
+    local xml="$1" key="$2"
+    # Handles: oe:key="hostname" oe:value="val"
+    #      and: key="hostname" value="val"
+    printf '%s' "$xml" | grep -o "key=\"${key}\" [a-z:]*value=\"[^\"]*\"" \
+        | sed 's/.*value="\([^"]*\)"/\1/' | head -1
+}
+
+# ── Method 1: VMware backdoor RPC (vmware-rpctool) ────────────────────────
+get_via_backdoor() {
     local key="$1"
-    local val=""
+    command -v vmware-rpctool >/dev/null 2>&1 || return 1
+    vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null
+}
 
-    # Method 1: vmware-rpctool backdoor (requires heartbeat channel to be open)
-    if command -v vmware-rpctool >/dev/null 2>&1; then
-        val=$(vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null)
-    fi
+# ── Method 2: OVF environment XML via guestinfo.ovfenv ───────────────────
+get_ovfenv_xml() {
+    command -v vmware-rpctool >/dev/null 2>&1 || return 1
+    vmware-rpctool "info-get guestinfo.ovfenv" 2>/dev/null
+}
 
-    # Method 2: OVF environment XML delivered via guestinfo.ovfenv
-    if [ -z "$val" ] && command -v vmware-rpctool >/dev/null 2>&1; then
-        local ovfenv
-        ovfenv=$(vmware-rpctool "info-get guestinfo.ovfenv" 2>/dev/null)
-        if [ -n "$ovfenv" ]; then
-            # Parse: <Property oe:key="hostname" oe:value="myhost"/>
-            val=$(printf '%s' "$ovfenv" | \
-                  grep -o "key=\"${key}\" oe:value=\"[^\"]*\"" | \
-                  sed 's/.*oe:value="\([^"]*\)"/\1/' | head -1)
-            # Also try without oe: prefix
-            if [ -z "$val" ]; then
-                val=$(printf '%s' "$ovfenv" | \
-                      grep -o "key=\"${key}\" ovf:value=\"[^\"]*\"" | \
-                      sed 's/.*ovf:value="\([^"]*\)"/\1/' | head -1)
-            fi
+# ── Method 3: OVF environment from mounted CD-ROM/ISO ────────────────────
+# VMware can deliver OVF properties as an ISO mounted as a CD-ROM.
+# The ISO contains a file named "ovf-env.xml" at the root.
+get_ovfenv_from_cdrom() {
+    local xml=""
+    for dev in /dev/sr0 /dev/cdrom /dev/dvd; do
+        [ -b "$dev" ] || continue
+        # Try to mount temporarily
+        mkdir -p /mnt/ovfenv
+        if mount -o ro "$dev" /mnt/ovfenv 2>/dev/null; then
+            for f in /mnt/ovfenv/ovf-env.xml /mnt/ovfenv/ovf-environment.xml \
+                     /mnt/ovfenv/OVF-ENV.XML; do
+                [ -f "$f" ] && xml=$(cat "$f") && break
+            done
+            umount /mnt/ovfenv 2>/dev/null
+            [ -n "$xml" ] && printf '%s' "$xml" && return 0
         fi
+    done
+    return 1
+}
+
+# ── Method 4: OVF environment from EFI variables ─────────────────────────
+get_ovfenv_from_efi() {
+    local base="/sys/firmware/efi/efivars"
+    [ -d "$base" ] || return 1
+    # VMware injects as guestinfo.ovfenv-{GUID} EFI variable
+    for f in "$base"/guestinfo.ovfenv-*; do
+        [ -f "$f" ] || continue
+        # Skip 4-byte EFI attribute header
+        dd if="$f" bs=1 skip=4 2>/dev/null && return 0
+    done
+    return 1
+}
+
+# ── Main property reader ───────────────────────────────────────────────────
+get_guestinfo() {
+    local key="$1" val=""
+
+    # Try direct backdoor first
+    val=$(get_via_backdoor "$key")
+    [ -n "$val" ] && printf '%s' "$val" && return 0
+
+    # Use cached OVF XML if available
+    if [ -f "$OVF_XML_CACHE" ]; then
+        val=$(parse_ovf_xml "$(cat "$OVF_XML_CACHE")" "$key")
+        [ -n "$val" ] && printf '%s' "$val" && return 0
     fi
 
-    printf '%s' "$val"
+    # Try to get the full OVF XML from all sources and cache it
+    local xml=""
+    xml=$(get_ovfenv_xml)
+    [ -z "$xml" ] && xml=$(get_ovfenv_from_cdrom)
+    [ -z "$xml" ] && xml=$(get_ovfenv_from_efi)
+
+    if [ -n "$xml" ]; then
+        printf '%s' "$xml" > "$OVF_XML_CACHE"
+        val=$(parse_ovf_xml "$xml" "$key")
+        [ -n "$val" ] && printf '%s' "$val" && return 0
+    fi
+
+    return 1
 }
 
 case "$1" in
@@ -50,27 +106,28 @@ case "$1" in
     if [ -n "$HOSTNAME" ]; then
         echo "$HOSTNAME" > /etc/hostname
         hostname "$HOSTNAME"
+        echo "  hostname: $HOSTNAME"
     fi
 
-    # Apply network (static or DHCP — handled by S10network)
+    # Write network config for S10network to consume
     if [ -n "$IP_CIDR" ]; then
         mkdir -p /etc/network
-        cat > /etc/network/config << EOF
+        cat > /etc/network/ovf-config << EOF
 INTERFACE=eth0
 IP_CIDR=$IP_CIDR
-GATEWAY=$GATEWAY
-DNS=$DNS_SERVERS
+GATEWAY=${GATEWAY:-}
+DNS=${DNS_SERVERS:-}
 EOF
+        echo "  network: $IP_CIDR gw=${GATEWAY:-dhcp}"
     fi
 
-    # One-time: password and SSH key
+    # One-time setup (password, SSH key)
     if [ ! -f "$SENTINEL" ]; then
         if [ -n "$PASSWORD" ]; then
             echo "root:$PASSWORD" | chpasswd
-            # Force password change on first login
             chage -d 0 root 2>/dev/null || passwd -e root 2>/dev/null || true
-            # Start ttyd now that a password is set
             /etc/init.d/S50ttyd start 2>/dev/null || true
+            echo "  password: set (change required on first login)"
         fi
 
         if [ -n "$SSH_KEY" ]; then
@@ -78,6 +135,7 @@ EOF
             chmod 700 /root/.ssh
             echo "$SSH_KEY" >> /root/.ssh/authorized_keys
             chmod 600 /root/.ssh/authorized_keys
+            echo "  ssh key: installed"
         fi
 
         mkdir -p "$(dirname $SENTINEL)"

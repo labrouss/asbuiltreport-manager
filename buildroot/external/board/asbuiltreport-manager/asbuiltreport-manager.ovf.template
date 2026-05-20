@@ -110,7 +110,7 @@
     </VirtualHardwareSection>
 
     <!-- OVF Properties — configurable at deploy time in vCenter -->
-    <ProductSection ovf:required="false" ovf:transport="com.vmware.guestInfo">
+    <ProductSection ovf:required="false" ovf:transport="com.vmware.guestInfo iso">
       <Info>Application configuration properties</Info>
       <Product>AsBuiltReport Manager</Product>
       <Vendor>AsBuiltReport</Vendor>
