@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-21-b07 (fix chmod step in workflow)
+# Cache-bust: 2026-05-21-b08 (vmware-tools out of compose, S31 manages exclusively)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #

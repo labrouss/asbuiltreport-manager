@@ -1,7 +1,8 @@
 #!/bin/sh
 # /etc/init.d/S31vmware-tools
-# Starts the vmware-tools container immediately after Docker (S30docker).
-# S32ovf-init depends on this container to read OVF guestinfo properties on first boot.
+# Starts the vmware-tools container after Docker (S30docker).
+# S32ovf-init depends on this container to read OVF guestinfo on first boot.
+# Managed exclusively here — NOT in docker-compose (avoids name conflicts).
 
 CONTAINER="asbuiltreport-vmware-tools"
 IMAGE="asbuiltreport-vmware-tools:latest"
@@ -9,15 +10,24 @@ PRELOAD_DIR="/var/lib/docker-preload"
 
 case "$1" in
   start)
-    # Check if image exists — may not on very first boot before S40 loads images
+    # Already running — nothing to do
+    if docker inspect --format='{{.State.Running}}' "$CONTAINER" \
+       2>/dev/null | grep -q true; then
+        echo "vmware-tools container already running"
+        exit 0
+    fi
+
+    # Remove any stopped container with the same name
+    docker rm -f "$CONTAINER" 2>/dev/null || true
+
+    # Load image if not present
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        # Try to load it directly if the tarball exists
         TARBALL="${PRELOAD_DIR}/asbuiltreport-vmware-tools.tar.gz"
         if [ -f "$TARBALL" ]; then
             echo "Loading vmware-tools image..."
             gunzip -c "$TARBALL" | docker load
         else
-            echo "S31vmware-tools: image not available yet, skipping"
+            echo "S31vmware-tools: image not available, skipping"
             exit 0
         fi
     fi
@@ -30,29 +40,22 @@ case "$1" in
         --pid host \
         --network host \
         -v /var/run:/var/run \
-        "$IMAGE" >/dev/null 2>&1 \
+        "$IMAGE" \
         && echo "OK" \
-        || echo "already running or failed"
+        || echo "FAILED"
     ;;
 
   stop)
     echo -n "Stopping vmware-tools container... "
-    docker stop "$CONTAINER" 2>/dev/null
-    docker rm "$CONTAINER" 2>/dev/null
-    echo "OK"
+    docker rm -f "$CONTAINER" 2>/dev/null && echo "OK" || echo "not running"
     ;;
 
-  restart)
-    "$0" stop; sleep 1; "$0" start
-    ;;
+  restart) "$0" stop; sleep 1; "$0" start ;;
 
   status)
     docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null \
         || echo "not running"
     ;;
 
-  *)
-    echo "Usage: $0 {start|stop|restart|status}"
-    exit 1
-    ;;
+  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac
