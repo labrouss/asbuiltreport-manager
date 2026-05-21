@@ -1,17 +1,28 @@
 #!/bin/sh
 # /etc/init.d/S32ovf-init
 #
-# First-boot: queries VMware guestinfo, saves config to local disk, sets sentinel.
-# Subsequent boots: reads from local disk only — never queries VMware again.
+# STRATEGY: Query VMware ONCE for the full OVF environment XML via
+# vmtoolsd --cmd "info-get guestinfo.ovfEnv", save the raw XML to disk,
+# then parse everything locally on all subsequent boots.
 #
-# This pattern guarantees config survives vMotion, HA restart, snapshot
-# consolidation, and any other event that flushes VMware's runtime guestInfo cache.
+# guestinfo.ovfEnv is only available on first boot / fresh deployment.
+# After VMware flushes its runtime cache the XML is gone.
+# The saved ovf_env.xml is our permanent local copy.
 
 CONFIG_DIR="/var/lib/asbuiltreport/config"
+OVF_XML="${CONFIG_DIR}/ovf_env.xml"
 ENV_FILE="${CONFIG_DIR}/ovf_env.sh"
 SENTINEL="${CONFIG_DIR}/.provisioned"
 
-# ── Password utility ───────────────────────────────────────────────────────
+# ── Parse a property from saved OVF XML ───────────────────────────────────
+# Handles: <Property oe:key="hostname" oe:value="myhost"/>
+parse_ovf() {
+    local key="$1"
+    grep -o "key=\"${key}\" oe:value=\"[^\"]*\"" "$OVF_XML" 2>/dev/null \
+        | sed 's/.*oe:value="\([^"]*\)"/\1/' | head -1
+}
+
+# ── Set root password ──────────────────────────────────────────────────────
 set_root_password() {
     local pw="$1"
     [ -z "$pw" ] && return
@@ -26,23 +37,13 @@ set_root_password() {
     fi
 }
 
-# ── Read one guestinfo key via Docker privileged container ─────────────────
-get_guestinfo() {
-    local key="$1"
-    if command -v docker >/dev/null 2>&1 && \
-       docker inspect --format='{{.State.Running}}' \
-           asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
-        docker exec asbuiltreport-vmware-tools \
-            vmware-rpctool "info-get guestinfo.${key}" 2>/dev/null
-    fi
-}
-
 # ── Apply config from ENV_FILE ─────────────────────────────────────────────
 apply_config() {
-    # shellcheck source=/dev/null
+    [ -f "$ENV_FILE" ] || return
     . "$ENV_FILE"
 
-    [ -n "$OVF_HOSTNAME" ] && echo "$OVF_HOSTNAME" > /etc/hostname && hostname "$OVF_HOSTNAME"
+    [ -n "$OVF_HOSTNAME" ] && echo "$OVF_HOSTNAME" > /etc/hostname && hostname "$OVF_HOSTNAME" \
+        && echo "  hostname: $OVF_HOSTNAME"
 
     if [ -n "$OVF_IP_CIDR" ]; then
         mkdir -p /etc/network
@@ -53,51 +54,85 @@ IP_CIDR=$OVF_IP_CIDR
 GATEWAY=${OVF_GATEWAY:-}
 DNS=${OVF_DNS:-8.8.8.8}
 EOF
+        echo "  network: $OVF_IP_CIDR via ${OVF_GATEWAY:-dhcp}"
     fi
 
-    [ -n "$OVF_PASSWORD" ] && set_root_password "$OVF_PASSWORD"
+    if [ -n "$OVF_PASSWORD" ]; then
+        set_root_password "$OVF_PASSWORD"
+        passwd -e root 2>/dev/null || true
+        /etc/init.d/S50ttyd start 2>/dev/null || true
+        echo "  password: set"
+    fi
 
     if [ -n "$OVF_SSH_KEY" ]; then
         mkdir -p /root/.ssh && chmod 700 /root/.ssh
         grep -qF "$OVF_SSH_KEY" /root/.ssh/authorized_keys 2>/dev/null || \
             echo "$OVF_SSH_KEY" >> /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
+        echo "  ssh key: installed"
     fi
-
-    [ -n "$OVF_PASSWORD" ] && /etc/init.d/S50ttyd start 2>/dev/null || true
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────
 case "$1" in
   start)
-    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$CONFIG_DIR" && chmod 700 "$CONFIG_DIR"
 
+    # ── Subsequent boots: read from saved local files ──────────────────────
     if [ -f "$SENTINEL" ]; then
-        # ── Subsequent boots: read from local disk ─────────────────────────
-        echo "OVF: using saved configuration from ${ENV_FILE}"
-        [ -f "$ENV_FILE" ] && apply_config
+        echo "OVF: applying saved configuration..."
+        apply_config
         exit 0
     fi
 
-    # ── First boot: query VMware ───────────────────────────────────────────
-    echo "OVF: first boot — querying VMware guestinfo..."
+    # ── First boot: fetch OVF environment XML once ─────────────────────────
+    echo "OVF: first boot — fetching guestinfo.ovfEnv..."
 
-    OVF_HOSTNAME=$(get_guestinfo hostname)
-    OVF_IP_CIDR=$(get_guestinfo ipaddress)
-    OVF_GATEWAY=$(get_guestinfo gateway)
-    OVF_DNS=$(get_guestinfo dns)
-    OVF_PASSWORD=$(get_guestinfo password)
-    OVF_SSH_KEY=$(get_guestinfo ssh_authorized_key)
+    RAW_XML=""
 
-    if [ -z "${OVF_HOSTNAME}${OVF_IP_CIDR}${OVF_PASSWORD}${OVF_SSH_KEY}" ]; then
-        echo "OVF: no properties found — setup wizard will run on first login"
+    # Query guestinfo.ovfEnv ONCE via the privileged vmware-tools container.
+    # vmtoolsd is preferred — if it returns empty, try vmware-rpctool as fallback.
+    # Both query the same key so we stop as soon as we get a result.
+    if docker inspect --format='{{.State.Running}}' \
+       asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
+
+        # Primary: vmtoolsd (most reliable on ESXi 7+)
+        RAW_XML=$(docker exec asbuiltreport-vmware-tools \
+            vmtoolsd --cmd "info-get guestinfo.ovfEnv" 2>/dev/null)
+
+        if [ -n "$RAW_XML" ]; then
+            echo "OVF: got ovfEnv XML via vmtoolsd ($(printf '%s' "$RAW_XML" | wc -c) bytes)"
+        else
+            # Fallback: vmware-rpctool (older ESXi / different transport)
+            RAW_XML=$(docker exec asbuiltreport-vmware-tools \
+                vmware-rpctool "info-get guestinfo.ovfEnv" 2>/dev/null)
+            [ -n "$RAW_XML" ] && echo "OVF: got ovfEnv XML via vmware-rpctool"
+        fi
+    fi
+
+    if [ -z "$RAW_XML" ]; then
+        echo "OVF: no guestinfo.ovfEnv available — setup wizard will run on first login"
         exit 0
     fi
 
-    # Save to local persistent storage
+    # Save raw XML permanently
+    printf '%s' "$RAW_XML" > "$OVF_XML"
+    chmod 600 "$OVF_XML"
+    echo "OVF: XML saved to $OVF_XML"
+
+    # Parse all properties from XML
+    OVF_HOSTNAME=$(parse_ovf "guestinfo.hostname")
+    OVF_IP_CIDR=$(parse_ovf  "guestinfo.ipaddress")
+    OVF_GATEWAY=$(parse_ovf  "guestinfo.gateway")
+    OVF_DNS=$(parse_ovf      "guestinfo.dns")
+    OVF_PASSWORD=$(parse_ovf "guestinfo.password")
+    OVF_SSH_KEY=$(parse_ovf  "guestinfo.ssh_authorized_key")
+
+    # Save parsed values as shell vars (without the password)
     cat > "$ENV_FILE" << EOF
-# OVF configuration — written on first boot $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# Do not edit: regenerate with 'rm ${SENTINEL} && reboot'
+# OVF configuration parsed from guestinfo.ovfEnv
+# Written: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# To re-provision: rm $SENTINEL && reboot
 OVF_HOSTNAME='${OVF_HOSTNAME}'
 OVF_IP_CIDR='${OVF_IP_CIDR}'
 OVF_GATEWAY='${OVF_GATEWAY}'
@@ -109,15 +144,14 @@ EOF
 
     # Drop sentinel — never query VMware again
     touch "$SENTINEL"
-    echo "OVF: configuration saved to ${ENV_FILE}"
 
+    echo "OVF: provisioning complete"
     apply_config
     ;;
 
   reprovision)
-    # Force re-read from VMware on next boot
     rm -f "$SENTINEL"
-    echo "OVF: sentinel removed — will re-query VMware on next boot"
+    echo "OVF: sentinel cleared — will re-fetch guestinfo.ovfEnv on next boot"
     ;;
 
   stop) ;;

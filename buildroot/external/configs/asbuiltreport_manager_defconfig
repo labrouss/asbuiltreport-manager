@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-21-b08 (vmware-tools out of compose, S31 manages exclusively)
+# Cache-bust: 2026-05-21-b11 (single ovfEnv query, stop on first success)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #

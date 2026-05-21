@@ -166,4 +166,14 @@ do
     fi
 done
 
+# Remove vmware-tools from compose — managed by S31vmware-tools init script only
+COMPOSE_FILE="${TARGET_DIR}/etc/docker/compose/asbuiltreport-manager/docker-compose.yml"
+if [ -f "${COMPOSE_FILE}" ] && grep -q "vmware-tools" "${COMPOSE_FILE}"; then
+    sed -i '/# ── VMware Tools/,/- \/var\/run:\/var\/run/{d}' "${COMPOSE_FILE}"
+    # Also remove any blank lines that were between services
+    sed -i '/^$/N;/^
+$/d' "${COMPOSE_FILE}" || true
+    log "Removed vmware-tools service from docker-compose.yml"
+fi
+
 info "post-build.sh complete."
