@@ -319,16 +319,9 @@ jobs:
         run: |
           chmod +x buildroot/external/board/asbuiltreport-manager/post-build.sh
           chmod +x buildroot/external/board/asbuiltreport-manager/post-image.sh
-          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S05ovf-init
-          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S10network
-          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S20sshd
-          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S30docker
-          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S40asbuiltreport
-          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S99console
-          chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-console.sh
-          chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-first-boot.sh
-          chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-network-config.sh
-          chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-ovf-init.sh
+          chmod +x buildroot/external/rootfs_overlay/etc/init.d/S*
+          chmod +x buildroot/external/rootfs_overlay/usr/local/bin/abr-*
+          chmod +x buildroot/external/rootfs_overlay/usr/local/bin/vmware-rpctool 2>/dev/null || true
 
       # -- Buildroot source cache ------------------------------------------------
       - name: Cache Buildroot source tree
