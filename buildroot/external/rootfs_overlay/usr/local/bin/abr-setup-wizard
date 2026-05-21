@@ -1,5 +1,25 @@
 #!/bin/sh
 # abr-setup-wizard — First-boot configuration wizard
+
+set_root_password() {
+    local pw="$1"
+    # Prefer chpasswd (shadow package) — cleanest method
+    if command -v chpasswd >/dev/null 2>&1; then
+        printf 'root:%s' "$pw" | chpasswd
+        return
+    fi
+    # Fallback: openssl to generate SHA-512 hash, write to /etc/shadow directly
+    local hash
+    hash=$(openssl passwd -6 "$pw" 2>/dev/null)
+    if [ -n "$hash" ]; then
+        sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/shadow 2>/dev/null ||         sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/passwd 2>/dev/null
+        return
+    fi
+    # Last resort: BusyBox passwd via stdin
+    printf '%s
+%s
+' "$pw" "$pw" | passwd root 2>/dev/null
+}
 # Called by S05ovf-init when OVF properties are unavailable.
 # Uses whiptail for a guided TUI setup of hostname, network, password.
 
@@ -109,7 +129,7 @@ tui_setup() {
             "Confirm root password:" $H $W "" \
             3>&1 1>&2 2>&3) || return 1
         if [ "$PASS1" = "$PASS2" ]; then
-            [ -n "$PASS1" ] && echo "root:$PASS1" | chpasswd
+            [ -n "$PASS1" ] && set_root_password "$PASS1"
             break
         fi
         $T --title "$TITLE" --msgbox "Passwords do not match. Try again." 8 $W 2>/dev/tty

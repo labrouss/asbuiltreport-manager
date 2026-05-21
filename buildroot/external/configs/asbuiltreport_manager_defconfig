@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-20-b09 (OVF required=true guestInfo-only + S05ovf-init restore)
+# Cache-bust: 2026-05-21-b01 (openssl bin + shadow for chpasswd)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #
@@ -15,7 +15,9 @@
 #   - BR2_TARGET_GRUB2_X86_64_EFI only — no BIOS/legacy (avoids BR2_LEGACY)
 #   - BR2_PACKAGE_DOCKER_COMPOSE=y (Buildroot 2024.02 has the compose package)
 #   - BR2_PACKAGE_OPEN_VM_TOOLS=y (not OPENVMTOOLS)
-#   - BR2_PACKAGE_OPENSSH=y (not dropbear)
+#   - BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_SHADOW=y
+BR2_PACKAGE_SHADOW_SHADOWGRP=y (not dropbear)
 #   - BR2_INIT_SYSTEMD is NOT set — san-manager uses busybox init
 #     (systemd pulls in a massive dependency tree; use S-script style init)
 #   - Rootfs size 38G for Docker image storage
@@ -73,7 +75,10 @@ BR2_PACKAGE_BUSYBOX=y
 BR2_PACKAGE_BASH=y
 BR2_PACKAGE_CA_CERTIFICATES=y
 BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_OPENSSL_BIN=y
 BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_SHADOW=y
+BR2_PACKAGE_SHADOW_SHADOWGRP=y
 BR2_PACKAGE_LIBCURL=y
 BR2_PACKAGE_LIBCURL_CURL=y
 

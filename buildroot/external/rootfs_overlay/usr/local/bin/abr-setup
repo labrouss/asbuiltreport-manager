@@ -29,6 +29,26 @@ askpass() {
     done
 }
 
+set_root_password() {
+    local pw="$1"
+    # Prefer chpasswd (shadow package) — cleanest method
+    if command -v chpasswd >/dev/null 2>&1; then
+        printf 'root:%s' "$pw" | chpasswd
+        return
+    fi
+    # Fallback: openssl to generate SHA-512 hash, write to /etc/shadow directly
+    local hash
+    hash=$(openssl passwd -6 "$pw" 2>/dev/null)
+    if [ -n "$hash" ]; then
+        sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/shadow 2>/dev/null ||         sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/passwd 2>/dev/null
+        return
+    fi
+    # Last resort: BusyBox passwd via stdin
+    printf '%s
+%s
+' "$pw" "$pw" | passwd root 2>/dev/null
+}
+
 run_wizard() {
     clear
     cat << 'BANNER'
@@ -84,10 +104,20 @@ EOF
         fi
     fi
 
-    # ── Root password ─────────────────────────────────────────────────────
+    # ── Root password ─────────────────────────────────────────────────────────
     echo ""
-    echo "Set root password (required for SSH and web console access):"
-    passwd root
+    echo "Set root password:"
+    while true; do
+        printf "Password: "
+        stty -echo; read -r p1; stty echo; echo
+        printf "Confirm:  "
+        stty -echo; read -r p2; stty echo; echo
+        if [ -n "$p1" ] && [ "$p1" = "$p2" ]; then
+            set_root_password "$p1"
+            break
+        fi
+        echo "Passwords don't match or empty — try again."
+    done
 
     # ── SSH public key (optional) ─────────────────────────────────────────
     echo ""

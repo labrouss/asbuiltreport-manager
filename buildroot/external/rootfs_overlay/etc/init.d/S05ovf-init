@@ -7,6 +7,27 @@
 
 SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
 
+# ── Set root password by writing hash directly to /etc/shadow ─────────────
+set_root_password() {
+    local pw="$1"
+    # Prefer chpasswd (shadow package) — cleanest method
+    if command -v chpasswd >/dev/null 2>&1; then
+        printf 'root:%s' "$pw" | chpasswd
+        return
+    fi
+    # Fallback: openssl to generate SHA-512 hash, write to /etc/shadow directly
+    local hash
+    hash=$(openssl passwd -6 "$pw" 2>/dev/null)
+    if [ -n "$hash" ]; then
+        sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/shadow 2>/dev/null ||         sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/passwd 2>/dev/null
+        return
+    fi
+    # Last resort: BusyBox passwd via stdin
+    printf '%s
+%s
+' "$pw" "$pw" | passwd root 2>/dev/null
+}
+
 # ── Read a guestinfo property ──────────────────────────────────────────────
 get_guestinfo() {
     local key="$1"
@@ -59,7 +80,7 @@ EOF
     # One-time: password + SSH key
     if [ ! -f "$SENTINEL" ]; then
         if [ -n "$PASSWORD" ]; then
-            echo "root:$PASSWORD" | chpasswd
+            set_root_password "$PASSWORD"
             # Mark setup done so wizard doesn't override it
             mkdir -p "$(dirname $SENTINEL)"
             touch "$SENTINEL"

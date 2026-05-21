@@ -118,7 +118,7 @@
       <FullVersion>@@VERSION@@</FullVersion>
       <ProductUrl>https://www.asbuiltreport.com</ProductUrl>
 
-      <Property ovf:key="guestinfo.hostname"
+      <Property ovf:key="oe:guestinfo.hostname"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="asbuiltreport-manager">
@@ -126,7 +126,7 @@
         <Description>Appliance hostname (e.g. abr.company.local)</Description>
       </Property>
 
-      <Property ovf:key="guestinfo.ipaddress"
+      <Property ovf:key="oe:guestinfo.ipaddress"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">
@@ -134,7 +134,7 @@
         <Description>Static IP in CIDR notation e.g. 192.168.1.50/24. Leave blank for DHCP.</Description>
       </Property>
 
-      <Property ovf:key="guestinfo.gateway"
+      <Property ovf:key="oe:guestinfo.gateway"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">
@@ -142,7 +142,7 @@
         <Description>Default gateway IP. Required if static IP is set.</Description>
       </Property>
 
-      <Property ovf:key="guestinfo.dns"
+      <Property ovf:key="oe:guestinfo.dns"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="8.8.8.8 8.8.4.4">
@@ -150,15 +150,15 @@
         <Description>Space-separated DNS server IPs.</Description>
       </Property>
 
-      <Property ovf:key="guestinfo.password"
+      <Property ovf:key="oe:guestinfo.password"
                 ovf:type="password"
                 ovf:userConfigurable="true"
                 ovf:value="">
         <Label>Root Password</Label>
-        <Description>Initial root password. Leave blank to disable password auth (SSH key only).</Description>
+        <Description>Initial root password. Leave blank to configure via console on first login.</Description>
       </Property>
 
-      <Property ovf:key="guestinfo.ssh_authorized_key"
+      <Property ovf:key="oe:guestinfo.ssh_authorized_key"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">
