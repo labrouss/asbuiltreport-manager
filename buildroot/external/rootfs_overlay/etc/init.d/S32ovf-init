@@ -1,21 +1,21 @@
 #!/bin/sh
 # /etc/init.d/S32ovf-init
 #
-# STRATEGY: Query VMware ONCE for the full OVF environment XML via
-# vmtoolsd --cmd "info-get guestinfo.ovfEnv", save the raw XML to disk,
-# then parse everything locally on all subsequent boots.
+# OVF Lifecycle:
+#   INPUT  (our template):  plain ovf:key="guestinfo.hostname" — no oe: prefix
+#   OUTPUT (VMware builds): <Property oe:key="guestinfo.hostname" oe:value="..."/>
 #
-# guestinfo.ovfEnv is only available on first boot / fresh deployment.
-# After VMware flushes its runtime cache the XML is gone.
-# The saved ovf_env.xml is our permanent local copy.
+# Strategy: fetch guestinfo.ovfEnv ONCE via vmtoolsd, save XML to disk,
+# parse locally on all subsequent boots. Never query VMware again after
+# the sentinel is written.
 
 CONFIG_DIR="/var/lib/asbuiltreport/config"
 OVF_XML="${CONFIG_DIR}/ovf_env.xml"
 ENV_FILE="${CONFIG_DIR}/ovf_env.sh"
 SENTINEL="${CONFIG_DIR}/.provisioned"
 
-# ── Parse a property from saved OVF XML ───────────────────────────────────
-# Handles: <Property oe:key="hostname" oe:value="myhost"/>
+# ── Parse a property from the saved OVF environment XML ───────────────────
+# VMware generates: <Property oe:key="guestinfo.hostname" oe:value="value"/>
 parse_ovf() {
     local key="$1"
     grep -o "key=\"${key}\" oe:value=\"[^\"]*\"" "$OVF_XML" 2>/dev/null \
@@ -37,13 +37,15 @@ set_root_password() {
     fi
 }
 
-# ── Apply config from ENV_FILE ─────────────────────────────────────────────
+# ── Apply configuration from ENV_FILE ─────────────────────────────────────
 apply_config() {
     [ -f "$ENV_FILE" ] || return
     . "$ENV_FILE"
 
-    [ -n "$OVF_HOSTNAME" ] && echo "$OVF_HOSTNAME" > /etc/hostname && hostname "$OVF_HOSTNAME" \
-        && echo "  hostname: $OVF_HOSTNAME"
+    [ -n "$OVF_HOSTNAME" ] \
+        && echo "$OVF_HOSTNAME" > /etc/hostname \
+        && hostname "$OVF_HOSTNAME" \
+        && echo "  hostname : $OVF_HOSTNAME"
 
     if [ -n "$OVF_IP_CIDR" ]; then
         mkdir -p /etc/network
@@ -54,22 +56,22 @@ IP_CIDR=$OVF_IP_CIDR
 GATEWAY=${OVF_GATEWAY:-}
 DNS=${OVF_DNS:-8.8.8.8}
 EOF
-        echo "  network: $OVF_IP_CIDR via ${OVF_GATEWAY:-dhcp}"
+        echo "  network  : $OVF_IP_CIDR gw=${OVF_GATEWAY:-dhcp}"
     fi
 
     if [ -n "$OVF_PASSWORD" ]; then
         set_root_password "$OVF_PASSWORD"
         passwd -e root 2>/dev/null || true
         /etc/init.d/S50ttyd start 2>/dev/null || true
-        echo "  password: set"
+        echo "  password : configured (change required on first login)"
     fi
 
     if [ -n "$OVF_SSH_KEY" ]; then
         mkdir -p /root/.ssh && chmod 700 /root/.ssh
-        grep -qF "$OVF_SSH_KEY" /root/.ssh/authorized_keys 2>/dev/null || \
-            echo "$OVF_SSH_KEY" >> /root/.ssh/authorized_keys
+        grep -qF "$OVF_SSH_KEY" /root/.ssh/authorized_keys 2>/dev/null \
+            || echo "$OVF_SSH_KEY" >> /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
-        echo "  ssh key: installed"
+        echo "  ssh key  : installed"
     fi
 }
 
@@ -78,86 +80,56 @@ case "$1" in
   start)
     mkdir -p "$CONFIG_DIR" && chmod 700 "$CONFIG_DIR"
 
-    # ── Subsequent boots: read from saved local files ──────────────────────
+    # Subsequent boots: read from local disk, never query VMware
     if [ -f "$SENTINEL" ]; then
         echo "OVF: applying saved configuration..."
         apply_config
         exit 0
     fi
 
-    # ── First boot: fetch OVF environment XML once ─────────────────────────
-    echo "OVF: first boot — fetching guestinfo.ovfEnv..."
+    # First boot: fetch the OVF environment XML from VMware — one shot
+    echo "OVF: first boot — querying guestinfo.ovfEnv..."
 
-    RAW_XML=""
+    # Wait for vmtoolsd daemon inside container to be ready
+    i=0
+    while [ $i -lt 5 ]; do
+        docker exec asbuiltreport-vmware-tools \
+            vmtoolsd --cmd "ping" >/dev/null 2>&1 && break
+        sleep 2; i=$((i+1))
+    done
 
-    # Query guestinfo.ovfEnv ONCE via the privileged vmware-tools container.
-    # vmtoolsd --cmd requires the vmtoolsd daemon to be running inside the container.
-    # The container entrypoint starts it — we wait up to 10s for it to be ready.
-    if docker inspect --format='{{.State.Running}}' \
-       asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
+    RAW_XML=$(docker exec asbuiltreport-vmware-tools \
+        vmtoolsd --cmd "info-get guestinfo.ovfEnv" 2>/dev/null)
 
-        # Wait for vmtoolsd daemon inside container to be ready
-        i=0
-        while [ $i -lt 5 ]; do
-            docker exec asbuiltreport-vmware-tools \
-                vmtoolsd --cmd "ping" >/dev/null 2>&1 && break
-            sleep 2; i=$((i+1))
-        done
+    # Filter out "No value found" response
+    [ "$RAW_XML" = "No value found" ] && RAW_XML=""
 
-        # Try all known key names (case varies between ESXi versions)
-        for key in "guestinfo.ovfEnv" "guestinfo.ovfenv"; do
-            RAW_XML=$(docker exec asbuiltreport-vmware-tools \
-                vmtoolsd --cmd "info-get ${key}" 2>/dev/null)
-            if [ -n "$RAW_XML" ]; then
-                echo "OVF: got XML via vmtoolsd key=${key} ($(printf '%s' "$RAW_XML" | wc -c) bytes)"
-                break
-            fi
-        done
-
-        # Fallback: vmware-rpctool if vmtoolsd returned nothing
-        if [ -z "$RAW_XML" ]; then
-            for key in "guestinfo.ovfEnv" "guestinfo.ovfenv"; do
-                RAW_XML=$(docker exec asbuiltreport-vmware-tools \
-                    vmware-rpctool "info-get ${key}" 2>/dev/null)
-                if [ -n "$RAW_XML" ]; then
-                    echo "OVF: got XML via vmware-rpctool key=${key}"
-                    break
-                fi
-            done
-        fi
+    if [ -z "$RAW_XML" ]; then
+        echo "OVF: guestinfo.ovfEnv not available"
+        echo "OVF: ensure VM was deployed via OVA wizard with properties filled in"
+        echo "OVF: falling back to abr-setup wizard on first login"
+        exit 0
     fi
 
-    if [ -n "$RAW_XML" ]; then
-        # Save raw XML permanently
-        printf '%s' "$RAW_XML" > "$OVF_XML"
-        chmod 600 "$OVF_XML"
-        echo "OVF: XML saved to $OVF_XML"
+    echo "OVF: received $(printf '%s' "$RAW_XML" | wc -c) bytes"
 
-        # Parse all properties from the XML blob
-        OVF_HOSTNAME=$(parse_ovf "guestinfo.hostname")
-        OVF_IP_CIDR=$(parse_ovf  "guestinfo.ipaddress")
-        OVF_GATEWAY=$(parse_ovf  "guestinfo.gateway")
-        OVF_DNS=$(parse_ovf      "guestinfo.dns")
-        OVF_PASSWORD=$(parse_ovf "guestinfo.password")
-        OVF_SSH_KEY=$(parse_ovf  "guestinfo.ssh_authorized_key")
-    else
-        # No ovfEnv XML — try individual guestinfo.* keys directly
-        # (set manually via vCenter Advanced Config or vim-cmd vmsvc/setguestinfo)
-        echo "OVF: no ovfEnv XML — trying individual guestinfo.* keys..."
-        rpc() { docker exec asbuiltreport-vmware-tools                     vmtoolsd --cmd "info-get guestinfo.$1" 2>/dev/null |                 grep -v "No value found" || true; }
-        OVF_HOSTNAME=$(rpc hostname)
-        OVF_IP_CIDR=$(rpc ipaddress)
-        OVF_GATEWAY=$(rpc gateway)
-        OVF_DNS=$(rpc dns)
-        OVF_PASSWORD=$(rpc password)
-        OVF_SSH_KEY=$(rpc ssh_authorized_key)
-    fi
+    # Save raw XML — permanent local copy, never need VMware again
+    printf '%s' "$RAW_XML" > "$OVF_XML"
+    chmod 600 "$OVF_XML"
 
-    # Save parsed values as shell vars (without the password)
+    # Parse all properties from the VMware-generated XML
+    OVF_HOSTNAME=$(parse_ovf "guestinfo.hostname")
+    OVF_IP_CIDR=$(parse_ovf  "guestinfo.ipaddress")
+    OVF_GATEWAY=$(parse_ovf  "guestinfo.gateway")
+    OVF_DNS=$(parse_ovf      "guestinfo.dns")
+    OVF_PASSWORD=$(parse_ovf "guestinfo.password")
+    OVF_SSH_KEY=$(parse_ovf  "guestinfo.ssh_authorized_key")
+
+    # Persist parsed values
     cat > "$ENV_FILE" << EOF
-# OVF configuration parsed from guestinfo.ovfEnv
+# OVF configuration — parsed from guestinfo.ovfEnv
 # Written: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# To re-provision: rm $SENTINEL && reboot
+# To re-provision: S32ovf-init reprovision && reboot
 OVF_HOSTNAME='${OVF_HOSTNAME}'
 OVF_IP_CIDR='${OVF_IP_CIDR}'
 OVF_GATEWAY='${OVF_GATEWAY}'
@@ -167,10 +139,10 @@ OVF_SSH_KEY='${OVF_SSH_KEY}'
 EOF
     chmod 600 "$ENV_FILE"
 
-    # Drop sentinel — never query VMware again
+    # Drop sentinel — done with VMware forever
     touch "$SENTINEL"
+    echo "OVF: provisioning complete — configuration saved to ${ENV_FILE}"
 
-    echo "OVF: provisioning complete"
     apply_config
     ;;
 
