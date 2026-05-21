@@ -4,7 +4,6 @@
           xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
           xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
           xmlns:vmw="http://www.vmware.com/schema/ovf"
-          xmlns:oe="http://schemas.dmtf.org/ovf/environment/1"
           xml:lang="en-US">
 
   <References>
@@ -118,7 +117,7 @@
       <FullVersion>@@VERSION@@</FullVersion>
       <ProductUrl>https://www.asbuiltreport.com</ProductUrl>
 
-      <Property ovf:key="oe:guestinfo.hostname"
+      <Property ovf:key="guestinfo.hostname"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="asbuiltreport-manager">
@@ -126,7 +125,7 @@
         <Description>Appliance hostname (e.g. abr.company.local)</Description>
       </Property>
 
-      <Property ovf:key="oe:guestinfo.ipaddress"
+      <Property ovf:key="guestinfo.ipaddress"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">
@@ -134,7 +133,7 @@
         <Description>Static IP in CIDR notation e.g. 192.168.1.50/24. Leave blank for DHCP.</Description>
       </Property>
 
-      <Property ovf:key="oe:guestinfo.gateway"
+      <Property ovf:key="guestinfo.gateway"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">
@@ -142,7 +141,7 @@
         <Description>Default gateway IP. Required if static IP is set.</Description>
       </Property>
 
-      <Property ovf:key="oe:guestinfo.dns"
+      <Property ovf:key="guestinfo.dns"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="8.8.8.8 8.8.4.4">
@@ -150,7 +149,7 @@
         <Description>Space-separated DNS server IPs.</Description>
       </Property>
 
-      <Property ovf:key="oe:guestinfo.password"
+      <Property ovf:key="guestinfo.password"
                 ovf:type="password"
                 ovf:userConfigurable="true"
                 ovf:value="">
@@ -158,7 +157,7 @@
         <Description>Initial root password. Leave blank to configure via console on first login.</Description>
       </Property>
 
-      <Property ovf:key="oe:guestinfo.ssh_authorized_key"
+      <Property ovf:key="guestinfo.ssh_authorized_key"
                 ovf:type="string"
                 ovf:userConfigurable="true"
                 ovf:value="">

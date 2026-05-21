@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-21-b11 (single ovfEnv query, stop on first success)
+# Cache-bust: 2026-05-21-b16 (remove oe: xmlns from OVF envelope - fixes vAppConfig null)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #

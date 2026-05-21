@@ -91,42 +91,67 @@ case "$1" in
     RAW_XML=""
 
     # Query guestinfo.ovfEnv ONCE via the privileged vmware-tools container.
-    # vmtoolsd is preferred — if it returns empty, try vmware-rpctool as fallback.
-    # Both query the same key so we stop as soon as we get a result.
+    # vmtoolsd --cmd requires the vmtoolsd daemon to be running inside the container.
+    # The container entrypoint starts it — we wait up to 10s for it to be ready.
     if docker inspect --format='{{.State.Running}}' \
        asbuiltreport-vmware-tools 2>/dev/null | grep -q true; then
 
-        # Primary: vmtoolsd (most reliable on ESXi 7+)
-        RAW_XML=$(docker exec asbuiltreport-vmware-tools \
-            vmtoolsd --cmd "info-get guestinfo.ovfEnv" 2>/dev/null)
+        # Wait for vmtoolsd daemon inside container to be ready
+        i=0
+        while [ $i -lt 5 ]; do
+            docker exec asbuiltreport-vmware-tools \
+                vmtoolsd --cmd "ping" >/dev/null 2>&1 && break
+            sleep 2; i=$((i+1))
+        done
 
-        if [ -n "$RAW_XML" ]; then
-            echo "OVF: got ovfEnv XML via vmtoolsd ($(printf '%s' "$RAW_XML" | wc -c) bytes)"
-        else
-            # Fallback: vmware-rpctool (older ESXi / different transport)
+        # Try all known key names (case varies between ESXi versions)
+        for key in "guestinfo.ovfEnv" "guestinfo.ovfenv"; do
             RAW_XML=$(docker exec asbuiltreport-vmware-tools \
-                vmware-rpctool "info-get guestinfo.ovfEnv" 2>/dev/null)
-            [ -n "$RAW_XML" ] && echo "OVF: got ovfEnv XML via vmware-rpctool"
+                vmtoolsd --cmd "info-get ${key}" 2>/dev/null)
+            if [ -n "$RAW_XML" ]; then
+                echo "OVF: got XML via vmtoolsd key=${key} ($(printf '%s' "$RAW_XML" | wc -c) bytes)"
+                break
+            fi
+        done
+
+        # Fallback: vmware-rpctool if vmtoolsd returned nothing
+        if [ -z "$RAW_XML" ]; then
+            for key in "guestinfo.ovfEnv" "guestinfo.ovfenv"; do
+                RAW_XML=$(docker exec asbuiltreport-vmware-tools \
+                    vmware-rpctool "info-get ${key}" 2>/dev/null)
+                if [ -n "$RAW_XML" ]; then
+                    echo "OVF: got XML via vmware-rpctool key=${key}"
+                    break
+                fi
+            done
         fi
     fi
 
-    if [ -z "$RAW_XML" ]; then
-        echo "OVF: no guestinfo.ovfEnv available — setup wizard will run on first login"
-        exit 0
+    if [ -n "$RAW_XML" ]; then
+        # Save raw XML permanently
+        printf '%s' "$RAW_XML" > "$OVF_XML"
+        chmod 600 "$OVF_XML"
+        echo "OVF: XML saved to $OVF_XML"
+
+        # Parse all properties from the XML blob
+        OVF_HOSTNAME=$(parse_ovf "guestinfo.hostname")
+        OVF_IP_CIDR=$(parse_ovf  "guestinfo.ipaddress")
+        OVF_GATEWAY=$(parse_ovf  "guestinfo.gateway")
+        OVF_DNS=$(parse_ovf      "guestinfo.dns")
+        OVF_PASSWORD=$(parse_ovf "guestinfo.password")
+        OVF_SSH_KEY=$(parse_ovf  "guestinfo.ssh_authorized_key")
+    else
+        # No ovfEnv XML — try individual guestinfo.* keys directly
+        # (set manually via vCenter Advanced Config or vim-cmd vmsvc/setguestinfo)
+        echo "OVF: no ovfEnv XML — trying individual guestinfo.* keys..."
+        rpc() { docker exec asbuiltreport-vmware-tools                     vmtoolsd --cmd "info-get guestinfo.$1" 2>/dev/null |                 grep -v "No value found" || true; }
+        OVF_HOSTNAME=$(rpc hostname)
+        OVF_IP_CIDR=$(rpc ipaddress)
+        OVF_GATEWAY=$(rpc gateway)
+        OVF_DNS=$(rpc dns)
+        OVF_PASSWORD=$(rpc password)
+        OVF_SSH_KEY=$(rpc ssh_authorized_key)
     fi
-
-    # Save raw XML permanently
-    printf '%s' "$RAW_XML" > "$OVF_XML"
-    chmod 600 "$OVF_XML"
-    echo "OVF: XML saved to $OVF_XML"
-
-    # Parse all properties from XML
-    OVF_HOSTNAME=$(parse_ovf "guestinfo.hostname")
-    OVF_IP_CIDR=$(parse_ovf  "guestinfo.ipaddress")
-    OVF_GATEWAY=$(parse_ovf  "guestinfo.gateway")
-    OVF_DNS=$(parse_ovf      "guestinfo.dns")
-    OVF_PASSWORD=$(parse_ovf "guestinfo.password")
-    OVF_SSH_KEY=$(parse_ovf  "guestinfo.ssh_authorized_key")
 
     # Save parsed values as shell vars (without the password)
     cat > "$ENV_FILE" << EOF
