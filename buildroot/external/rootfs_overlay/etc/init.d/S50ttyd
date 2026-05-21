@@ -5,7 +5,7 @@
 # Access: https://<vm-ip>:8443
 #
 # SECURITY: ttyd is only started if root has a non-empty password set.
-# On first boot the OVF property sets the password via S05ovf-init.
+# On first boot the OVF property sets the password via S32ovf-init.
 # If no password was provided at deploy time, ttyd stays disabled until
 # the operator sets a password via the serial/SSH console and reboots,
 # or runs: /etc/init.d/S50ttyd start

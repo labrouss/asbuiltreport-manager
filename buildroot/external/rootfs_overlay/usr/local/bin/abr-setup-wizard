@@ -20,7 +20,7 @@ set_root_password() {
 %s
 ' "$pw" "$pw" | passwd root 2>/dev/null
 }
-# Called by S05ovf-init when OVF properties are unavailable.
+# Called when OVF properties are unavailable at first login.
 # Uses whiptail for a guided TUI setup of hostname, network, password.
 
 SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"

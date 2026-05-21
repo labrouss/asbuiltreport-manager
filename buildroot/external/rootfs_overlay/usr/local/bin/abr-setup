@@ -2,7 +2,7 @@
 # abr-setup — First-login configuration wizard
 # Runs automatically on first login, can be re-run with: abr-setup
 
-SENTINEL="/var/lib/asbuiltreport/.ovf-init-done"
+SENTINEL="/var/lib/asbuiltreport/config/.provisioned"
 W=60
 H=18
 

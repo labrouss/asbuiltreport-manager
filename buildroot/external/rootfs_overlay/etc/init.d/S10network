@@ -1,6 +1,6 @@
 #!/bin/sh
 # /etc/init.d/S10network — Bring up network
-# /etc/network/config is written by S05ovf-init
+# /etc/network/config is written by S32ovf-init
 
 NETCFG="/etc/network/config"
 
@@ -17,7 +17,7 @@ case "$1" in
     [ -z "$IFACE" ] && IFACE="eth0"
     ip link set "$IFACE" up
 
-    # Read network config written by S05ovf-init
+    # Read network config written by S32ovf-init
     if [ -f "$NETCFG" ]; then
       . "$NETCFG"
     else

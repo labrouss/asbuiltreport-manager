@@ -1,0 +1,58 @@
+#!/bin/sh
+# /etc/init.d/S31vmware-tools
+# Starts the vmware-tools container immediately after Docker (S30docker).
+# S32ovf-init depends on this container to read OVF guestinfo properties on first boot.
+
+CONTAINER="asbuiltreport-vmware-tools"
+IMAGE="asbuiltreport-vmware-tools:latest"
+PRELOAD_DIR="/var/lib/docker-preload"
+
+case "$1" in
+  start)
+    # Check if image exists — may not on very first boot before S40 loads images
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        # Try to load it directly if the tarball exists
+        TARBALL="${PRELOAD_DIR}/asbuiltreport-vmware-tools.tar.gz"
+        if [ -f "$TARBALL" ]; then
+            echo "Loading vmware-tools image..."
+            gunzip -c "$TARBALL" | docker load
+        else
+            echo "S31vmware-tools: image not available yet, skipping"
+            exit 0
+        fi
+    fi
+
+    echo -n "Starting vmware-tools container... "
+    docker run -d \
+        --name "$CONTAINER" \
+        --restart unless-stopped \
+        --privileged \
+        --pid host \
+        --network host \
+        -v /var/run:/var/run \
+        "$IMAGE" >/dev/null 2>&1 \
+        && echo "OK" \
+        || echo "already running or failed"
+    ;;
+
+  stop)
+    echo -n "Stopping vmware-tools container... "
+    docker stop "$CONTAINER" 2>/dev/null
+    docker rm "$CONTAINER" 2>/dev/null
+    echo "OK"
+    ;;
+
+  restart)
+    "$0" stop; sleep 1; "$0" start
+    ;;
+
+  status)
+    docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null \
+        || echo "not running"
+    ;;
+
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

@@ -1,7 +1,0 @@
-config BR2_PACKAGE_VMWARE_RPCTOOL
-	bool "vmware-rpctool"
-	depends on BR2_x86_64
-	help
-	  Minimal VMware GuestInfo reader using the VMware backdoor I/O port.
-	  Replaces open-vm-tools for musl-based builds.
-	  Reads guestinfo properties set via OVF/vApp configuration.

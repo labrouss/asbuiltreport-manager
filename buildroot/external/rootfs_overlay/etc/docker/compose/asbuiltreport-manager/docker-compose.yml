@@ -5,6 +5,20 @@ name: asbuiltreport-manager
 
 services:
 
+  # ── VMware Tools: privileged container for OVF guestinfo reading ───────────
+  # Started automatically by docker compose. S32ovf-init queries this container
+  # on first boot to read guestinfo.* properties set via vCenter vApp config.
+  # Must run with privileged + pid:host for VMware backdoor port access.
+  vmware-tools:
+    image: asbuiltreport-vmware-tools:latest
+    container_name: asbuiltreport-vmware-tools
+    restart: unless-stopped
+    privileged: true
+    pid: host
+    network_mode: host
+    volumes:
+      - /var/run:/var/run
+
   # ── App container: Express API + React frontend ──────────────────────────
   app:
     image: asbuiltreport-app:latest

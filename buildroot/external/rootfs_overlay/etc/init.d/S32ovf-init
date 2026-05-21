@@ -1,5 +1,5 @@
 #!/bin/sh
-# /etc/init.d/S05ovf-init
+# /etc/init.d/S32ovf-init
 #
 # First-boot: queries VMware guestinfo, saves config to local disk, sets sentinel.
 # Subsequent boots: reads from local disk only — never queries VMware again.
