@@ -47,8 +47,8 @@ case "$1" in
     # ── Start compose stack ────────────────────────────────────────────────────
     cd "$COMPOSE_DIR" && docker compose up -d --remove-orphans
 
-    # Read OVF properties now that vmware-tools container is available
-    /etc/init.d/ovf-docker start &
+    # First boot: query VMware guestinfo now that vmware-tools container is up
+    /etc/init.d/S05ovf-init start &
 
     echo "AsBuiltReport Manager started."
 

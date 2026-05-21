@@ -1,6 +1,6 @@
 # =============================================================================
 # buildroot/external/configs/asbuiltreport_manager_defconfig
-# Cache-bust: 2026-05-21-b01 (openssl bin + shadow for chpasswd)
+# Cache-bust: 2026-05-21-b03 (pre-create config dir at build time)
 #
 # Buildroot 2024.02.x — AsBuiltReport Manager OVA
 #
