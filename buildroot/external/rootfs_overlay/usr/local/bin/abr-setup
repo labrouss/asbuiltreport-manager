@@ -1,162 +1,199 @@
 #!/bin/sh
 # abr-setup — First-login configuration wizard
-# Runs automatically on first login, can be re-run with: abr-setup
+# Runs automatically on first login if OVF provisioning didn't complete.
+# Re-run manually with: abr-setup --force
 
 SENTINEL="/var/lib/asbuiltreport/config/.provisioned"
-W=60
-H=18
+ENV_FILE="/var/lib/asbuiltreport/config/ovf_env.sh"
 
-# Use whiptail if available, otherwise plain text
-has_whiptail() { command -v whiptail >/dev/null 2>&1; }
-
-ask() {
-    # ask <prompt> <default>
-    printf "%s [%s]: " "$1" "$2"
-    read -r val
-    printf '%s' "${val:-$2}"
-}
-
-askpass() {
-    while true; do
-        printf "Password: "
-        stty -echo; read -r p1; stty echo; echo
-        printf "Confirm:  "
-        stty -echo; read -r p2; stty echo; echo
-        if [ "$p1" = "$p2" ] && [ -n "$p1" ]; then
-            printf '%s' "$p1"; return
-        fi
-        echo "Passwords don't match or empty — try again."
-    done
-}
-
+# ── Password utility ───────────────────────────────────────────────────────
 set_root_password() {
     local pw="$1"
-    # Prefer chpasswd (shadow package) — cleanest method
+    [ -z "$pw" ] && return 1
     if command -v chpasswd >/dev/null 2>&1; then
-        printf 'root:%s' "$pw" | chpasswd
-        return
+        printf 'root:%s' "$pw" | chpasswd && return 0
     fi
-    # Fallback: openssl to generate SHA-512 hash, write to /etc/shadow directly
-    local hash
-    hash=$(openssl passwd -6 "$pw" 2>/dev/null)
-    if [ -n "$hash" ]; then
-        sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/shadow 2>/dev/null ||         sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/passwd 2>/dev/null
-        return
+    if command -v openssl >/dev/null 2>&1; then
+        local hash
+        hash=$(openssl passwd -6 "$pw" 2>/dev/null)
+        if [ -n "$hash" ]; then
+            sed -i "s|^root:[^:]*:|root:${hash}:|" /etc/shadow 2>/dev/null && return 0
+        fi
     fi
-    # Last resort: BusyBox passwd via stdin
-    printf '%s
-%s
-' "$pw" "$pw" | passwd root 2>/dev/null
+    printf '%s\n%s\n' "$pw" "$pw" | passwd root 2>/dev/null
 }
 
+# ── Apply network configuration immediately ────────────────────────────────
+apply_network() {
+    local ip="$1" gw="$2" dns="$3"
+    local eth="eth0"
+
+    echo "  Applying network configuration..."
+
+    # Flush existing addresses and routes
+    ip addr flush dev "$eth" 2>/dev/null || true
+    ip route flush dev "$eth" 2>/dev/null || true
+
+    # Apply new address
+    ip addr add "$ip" dev "$eth" 2>/dev/null
+    ip link set "$eth" up 2>/dev/null
+
+    # Apply gateway
+    if [ -n "$gw" ]; then
+        ip route add default via "$gw" dev "$eth" 2>/dev/null \
+            && echo "  Gateway: $gw"
+    fi
+
+    # Apply DNS
+    if [ -n "$dns" ]; then
+        printf '' > /etc/resolv.conf
+        for server in $dns; do
+            echo "nameserver $server" >> /etc/resolv.conf
+        done
+        echo "  DNS: $dns"
+    fi
+
+    # Persist for next boot (S10network reads this)
+    mkdir -p /etc/network
+    cat > /etc/network/config << EOF
+INTERFACE=eth0
+MODE=static
+IP_CIDR=$ip
+GATEWAY=${gw:-}
+DNS=${dns:-8.8.8.8}
+EOF
+    echo "  Network config saved (persistent)"
+}
+
+# ── Wizard ─────────────────────────────────────────────────────────────────
 run_wizard() {
     clear
     cat << 'BANNER'
-  ╔══════════════════════════════════════════════════╗
-  ║     AsBuiltReport Manager — First Boot Setup    ║
-  ╚══════════════════════════════════════════════════╝
+  ╔══════════════════════════════════════════════════════╗
+  ║      AsBuiltReport Manager — First Boot Setup       ║
+  ║                                                      ║
+  ║  OVF properties were not available at boot.          ║
+  ║  Please configure this appliance manually.           ║
+  ╚══════════════════════════════════════════════════════╝
 BANNER
     echo ""
-    echo "This wizard configures hostname, network, and password."
     echo "Press Enter to accept defaults shown in [brackets]."
     echo ""
 
-    # ── Hostname ──────────────────────────────────────────────────────────
+    # ── Step 1: Hostname ───────────────────────────────────────────────────
+    echo "── Step 1/4: Hostname ─────────────────────────────────────────────"
     CURRENT_HOST=$(hostname)
-    HOSTNAME=$(ask "Hostname" "${CURRENT_HOST:-asbuiltreport-manager}")
+    printf "Hostname [%s]: " "${CURRENT_HOST:-asbuiltreport-manager}"
+    read -r INPUT
+    HOSTNAME="${INPUT:-${CURRENT_HOST:-asbuiltreport-manager}}"
     echo "$HOSTNAME" > /etc/hostname
     hostname "$HOSTNAME"
-
-    # ── Network ───────────────────────────────────────────────────────────
+    echo "  Hostname set to: $HOSTNAME"
     echo ""
+
+    # ── Step 2: Network ────────────────────────────────────────────────────
+    echo "── Step 2/4: Network ──────────────────────────────────────────────"
     CURRENT_IP=$(ip -4 addr show eth0 scope global 2>/dev/null \
                  | grep -oE 'inet [0-9./]+' | cut -d' ' -f2 | head -1)
-    echo "Current IP: ${CURRENT_IP:-DHCP (not yet assigned)}"
-    echo "Network: (1) Keep DHCP  (2) Set static IP"
-    printf "Choice [1]: "
-    read -r NET
-    NET="${NET:-1}"
-
-    if [ "$NET" = "2" ]; then
-        IP=$(ask "IP/prefix (e.g. 192.168.1.10/24)" "")
-        GW=$(ask "Gateway" "")
-        DNS=$(ask "DNS server" "8.8.8.8")
-
-        if [ -n "$IP" ]; then
-            # Write config for S10network to apply on next reboot
-            # Also apply immediately
-            ETH="eth0"
-            ip addr flush dev "$ETH" 2>/dev/null
-            ip addr add "$IP" dev "$ETH" 2>/dev/null
-            ip link set "$ETH" up 2>/dev/null
-            [ -n "$GW" ] && ip route add default via "$GW" dev "$ETH" 2>/dev/null
-            [ -n "$DNS" ] && echo "nameserver $DNS" > /etc/resolv.conf
-
-            mkdir -p /etc/network
-            cat > /etc/network/config << EOF
-INTERFACE=eth0
-MODE=static
-IP_CIDR=$IP
-GATEWAY=$GW
-DNS=$DNS
-EOF
-            echo "  Static IP applied: $IP"
-        fi
-    fi
-
-    # ── Root password ─────────────────────────────────────────────────────────
+    echo "  Current IP: ${CURRENT_IP:-not assigned (DHCP)}"
     echo ""
-    echo "Set root password:"
+    echo "  1) Keep DHCP"
+    echo "  2) Set static IP"
+    printf "Choice [1]: "
+    read -r NET_CHOICE
+    NET_CHOICE="${NET_CHOICE:-1}"
+
+    NET_IP="" NET_GW="" NET_DNS=""
+    if [ "$NET_CHOICE" = "2" ]; then
+        while true; do
+            printf "  IP address (CIDR e.g. 192.168.1.10/24): "
+            read -r NET_IP
+            [ -n "$NET_IP" ] && break
+            echo "  IP address is required for static configuration."
+        done
+        printf "  Gateway: "
+        read -r NET_GW
+        printf "  DNS servers [8.8.8.8]: "
+        read -r NET_DNS
+        NET_DNS="${NET_DNS:-8.8.8.8}"
+
+        apply_network "$NET_IP" "$NET_GW" "$NET_DNS"
+    else
+        echo "  Using DHCP — current IP: ${CURRENT_IP:-pending}"
+    fi
+    echo ""
+
+    # ── Step 3: Root password ──────────────────────────────────────────────
+    echo "── Step 3/4: Root Password ────────────────────────────────────────"
+    echo "  Required for SSH and web console access."
+    PASSWORD=""
     while true; do
-        printf "Password: "
+        printf "  Password: "
         stty -echo; read -r p1; stty echo; echo
-        printf "Confirm:  "
+        printf "  Confirm:  "
         stty -echo; read -r p2; stty echo; echo
         if [ -n "$p1" ] && [ "$p1" = "$p2" ]; then
-            set_root_password "$p1"
-            break
+            set_root_password "$p1" && PASSWORD="$p1" && break
         fi
-        echo "Passwords don't match or empty — try again."
+        echo "  Passwords don't match or empty — try again."
     done
-
-    # ── SSH public key (optional) ─────────────────────────────────────────
+    echo "  Password set."
     echo ""
-    printf "SSH public key (paste or press Enter to skip): "
-    read -r SSHKEY
-    if [ -n "$SSHKEY" ]; then
+
+    # ── Step 4: SSH public key (optional) ─────────────────────────────────
+    echo "── Step 4/4: SSH Public Key (optional) ────────────────────────────"
+    printf "  Paste SSH public key or press Enter to skip: "
+    read -r SSH_KEY
+    if [ -n "$SSH_KEY" ]; then
         mkdir -p /root/.ssh && chmod 700 /root/.ssh
-        echo "$SSHKEY" >> /root/.ssh/authorized_keys
+        echo "$SSH_KEY" >> /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
-        echo "  SSH key added."
+        echo "  SSH key installed."
+    else
+        echo "  Skipped."
     fi
+    echo ""
 
-    # ── Start ttyd now that password is set ───────────────────────────────
-    /etc/init.d/S50ttyd start 2>/dev/null || true
-
-    # ── Done ──────────────────────────────────────────────────────────────
-    mkdir -p "$(dirname $SENTINEL)"
+    # ── Save config and write sentinel ────────────────────────────────────
+    mkdir -p "$(dirname "$SENTINEL")"
+    cat > "$ENV_FILE" << EOF
+# Configuration set via abr-setup wizard
+# Written: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+OVF_HOSTNAME='${HOSTNAME}'
+OVF_IP_CIDR='${NET_IP}'
+OVF_GATEWAY='${NET_GW}'
+OVF_DNS='${NET_DNS}'
+OVF_PASSWORD='${PASSWORD}'
+OVF_SSH_KEY='${SSH_KEY}'
+EOF
+    chmod 600 "$ENV_FILE"
     touch "$SENTINEL"
 
+    # Start ttyd now that password is set
+    /etc/init.d/S50ttyd start 2>/dev/null || true
+
+    # ── Summary ───────────────────────────────────────────────────────────
     IP_NOW=$(ip -4 addr show eth0 scope global 2>/dev/null \
              | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
+    echo "── Setup Complete ─────────────────────────────────────────────────"
     echo ""
-    echo "  ┌─────────────────────────────────────────────┐"
-    echo "  │  Setup complete!                            │"
-    echo "  │                                             │"
-    printf "  │  Web UI:  http://%-26s│\n" "${IP_NOW:-<ip>}:3001"
-    printf "  │  Console: https://%-25s│\n" "${IP_NOW:-<ip>}:8443"
-    printf "  │  SSH:     ssh root@%-24s│\n" "${IP_NOW:-<ip>}"
-    echo "  └─────────────────────────────────────────────┘"
+    printf "  Hostname : %s\n"   "$HOSTNAME"
+    printf "  IP       : %s\n"   "${IP_NOW:-${NET_IP:-DHCP pending}}"
+    echo ""
+    printf "  Web UI   : http://%s:3001\n"   "${IP_NOW:-<ip>}"
+    printf "  Console  : https://%s:8443\n"  "${IP_NOW:-<ip>}"
+    printf "  SSH      : ssh root@%s\n"       "${IP_NOW:-<ip>}"
     echo ""
     printf "Press Enter to continue..."
     read -r _
 }
 
+# ── Entry point ────────────────────────────────────────────────────────────
 case "$1" in
   --force) rm -f "$SENTINEL" ;;
 esac
 
 [ -f "$SENTINEL" ] && exit 0
-[ ! -t 0 ] && exit 0   # not interactive
+[ ! -t 0 ]         && exit 0   # not interactive — skip silently
 
 run_wizard
